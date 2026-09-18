@@ -81,10 +81,8 @@ fn listar_instancias_prism_em(
                             let versao = texto_json_caminho(componente, &["version"]);
 
                             match uid.as_str() {
-                                "net.minecraft" => {
-                                    if versao_minecraft.is_empty() {
-                                        versao_minecraft = versao.unwrap_or_default();
-                                    }
+                                "net.minecraft" if versao_minecraft.is_empty() => {
+                                    versao_minecraft = versao.unwrap_or_default();
                                 }
                                 "net.minecraftforge" => {
                                     loader_tipo = Some("Forge".to_string());

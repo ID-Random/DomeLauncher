@@ -49,8 +49,44 @@ export interface PerfilSocial {
   emJogo?: boolean;
   atividadeAtual?: AtividadeSocial | null;
   ultimoSeenEm?: string | null;
+  emblemas?: Array<{
+    emblemaId: string;
+    nome: string;
+    descricao: string;
+    imagemUrl: string;
+    concedidoEm: string;
+  }>;
+  emblemasExibidos?: Array<{
+    emblemaId: string;
+    nome: string;
+    descricao: string;
+    imagemUrl: string;
+    concedidoEm: string;
+  }>;
+  bannerPerfilUrl?: string | null;
+  capturasFavoritas?: Array<{
+    id: string;
+    nome: string;
+    instanciaNome: string;
+    criadaEm?: string | null;
+    imagemUrl: string;
+  }>;
+  bio?: string;
+  instanciasRecentes?: InstanciaPublicaPerfil[];
+  instanciasFavoritas?: InstanciaPublicaPerfil[];
+  amigos?: AmigoSocial[];
   criadoEm: string;
   atualizadoEm: string;
+}
+
+export interface InstanciaPublicaPerfil {
+  id: string;
+  nome: string;
+  versao: string;
+  carregador: string;
+  iconeUrl?: string | null;
+  horasJogadas: number;
+  ultimaVez?: string | null;
 }
 
 export interface SessaoSocial {
@@ -58,6 +94,14 @@ export interface SessaoSocial {
   refreshToken: string;
   expiraEm: string;
   perfil: PerfilSocial;
+}
+
+export interface EmblemaSocial {
+  emblemaId: string;
+  nome: string;
+  descricao: string;
+  imagemUrl: string;
+  concedidoEm: string;
 }
 
 export interface AmigoSocial {
@@ -70,6 +114,7 @@ export interface AmigoSocial {
   status?: StatusPresenca;
   atividadeAtual?: AtividadeSocial | null;
   ultimoSeenEm?: string | null;
+  emblemaDestaque?: EmblemaSocial | null;
 }
 
 export interface SolicitacaoRecebida {
@@ -182,6 +227,29 @@ export interface LoaderVersionsResponse {
 export interface InstanciaResumo {
   id: string;
   name: string;
+}
+
+export interface AnaliseModpack {
+  id: string;
+  autorPerfilId: string;
+  autorNome: string;
+  autorHandle?: string | null;
+  source: "modrinth" | "curseforge";
+  projectId: string;
+  projectNome: string;
+  projectIcon?: string | null;
+  projectAuthor?: string | null;
+  slug?: string | null;
+  versionId?: string | null;
+  installedVersion?: string | null;
+  instanciaNome?: string | null;
+  horasRegistradas?: number | null;
+  recomendado: boolean;
+  conteudo: string;
+  totalCurtidas: number;
+  curtidoPorMim: boolean;
+  criadoEm: string;
+  atualizadoEm: string;
 }
 
 export interface SocialSidebarProps {

@@ -30,6 +30,7 @@ import Favorites from "./components/Favorites";
 import LibraryPage from "./components/LibraryPage";
 import HomePage from "./components/HomePage";
 import SettingsPage from "./components/Settings";
+import { LimiteErroSkins } from "./components/LimiteErroSkins";
 import InstanceManager from "./components/InstanceManager";
 import SocialSidebar from "./components/SocialSidebar";
 import { EsqueletoAba } from "./components/EsqueletoCarregamento";
@@ -45,8 +46,24 @@ import {
 const carregarSkinManager = () =>
   import("./components/SkinManager").then((modulo) => ({ default: modulo.SkinManager }));
 const carregarProjetoDetalheModal = () => import("./components/ProjetoDetalheModal");
-const SkinManager = lazy(carregarSkinManager);
 const ProjetoDetalheModal = lazy(carregarProjetoDetalheModal);
+const PerfilComunidade = lazy(() => import("./components/PerfilComunidade"));
+
+function TelaSkinsRecuperavel({ user }: { user: MinecraftAccount | null }) {
+  const [tentativa, setTentativa] = useState(0);
+  const GerenciadorSkins = useMemo(() => lazy(carregarSkinManager), [tentativa]);
+
+  return (
+    <LimiteErroSkins
+      tentativa={tentativa}
+      onTentarNovamente={() => setTentativa((valor) => valor + 1)}
+    >
+      <Suspense fallback={<EsqueletoAba />}>
+        <GerenciadorSkins user={user} />
+      </Suspense>
+    </LimiteErroSkins>
+  );
+}
 
 export interface MinecraftAccount {
   uuid: string;
@@ -178,6 +195,7 @@ const TITULOS_ABA: Record<string, string> = {
   explore: "Explorar",
   favorites: "Favoritos",
   skins: "Skins",
+  profile: "Perfil",
   settings: "Configurações",
   "instance-manager": "Instância",
   "project-detail": "Projeto",
@@ -186,6 +204,7 @@ const TITULOS_ABA: Record<string, string> = {
 export default function App() {
   const { instances, launch, launchServer, remove, fetchInstances } = useLauncher();
   const [activeTab, setActiveTab] = useState("home");
+  const [perfilVisualizadoId, setPerfilVisualizadoId] = useState<string | null>(null);
   const [historicoNavegacao, setHistoricoNavegacao] = useState<{
     anteriores: string[];
     proximas: string[];
@@ -227,6 +246,7 @@ export default function App() {
   const [painelSocialRecuado, setPainelSocialRecuado] = useState(true);
   const ehTelaXl = useBreakpointXl();
   const ultimaAssinaturaPresence = useRef<string>("");
+  const falhasDeteccaoExecucao = useRef<Record<string, number>>({});
   const menuContaRef = useRef<HTMLDivElement | null>(null);
   const alterarAba = useCallback((aba: string) => {
     startTransition(() => setActiveTab(aba));
@@ -294,6 +314,23 @@ export default function App() {
 
     window.addEventListener("keydown", navegarPeloTeclado);
     return () => window.removeEventListener("keydown", navegarPeloTeclado);
+  }, [avancarNavegacao, historicoNavegacao, voltarNavegacao]);
+
+  useEffect(() => {
+  const navegarPeloMouse = (evento: MouseEvent) => {
+    if (evento.button === 3 && historicoNavegacao.anteriores.length > 0) {
+      evento.preventDefault();
+        voltarNavegacao();
+      }
+
+      if (evento.button === 4 && historicoNavegacao.proximas.length > 0) {
+        evento.preventDefault();
+        avancarNavegacao();
+      }
+    };
+
+    window.addEventListener("mousedown", navegarPeloMouse, true);
+    return () => window.removeEventListener("mousedown", navegarPeloMouse, true);
   }, [avancarNavegacao, historicoNavegacao, voltarNavegacao]);
 
   useEffect(() => {
@@ -594,6 +631,17 @@ export default function App() {
         idsInstancias.map((id) => [id, Boolean(mapa?.[id])])
       );
       setMapaExecucao((anterior) => {
+        for (const id of idsInstancias) {
+          if (mapaNormalizado[id]) {
+            falhasDeteccaoExecucao.current[id] = 0;
+            continue;
+          }
+          if (anterior[id]) {
+            const falhas = (falhasDeteccaoExecucao.current[id] ?? 0) + 1;
+            falhasDeteccaoExecucao.current[id] = falhas;
+            if (falhas < 2) mapaNormalizado[id] = true;
+          }
+        }
         const houveEncerramento = idsInstancias.some(
           (id) => Boolean(anterior[id]) && !Boolean(mapaNormalizado[id])
         );
@@ -792,6 +840,7 @@ export default function App() {
     setInstanciaSendoEncerrada(id);
     try {
       await invoke("kill_instance", { instanceId: id });
+      falhasDeteccaoExecucao.current[id] = 2;
       setMapaExecucao((anterior) => ({ ...anterior, [id]: false }));
       await fetchInstances();
       await verificarInstanciasEmExecucao();
@@ -935,8 +984,16 @@ export default function App() {
   }, []);
 
   const handleProfileClick = () => {
-    setMenuContaAberto((atual) => !atual);
+    setMenuContaAberto(false);
+    setPerfilVisualizadoId(null);
+    navegarParaAba("profile");
   };
+
+  const abrirPerfilSocial = useCallback((perfilId: string) => {
+    setPerfilVisualizadoId(perfilId);
+    setSocialDrawerAberto(false);
+    navegarParaAba("profile");
+  }, [navegarParaAba]);
 
   const abrirProjeto = useCallback((origem: AbaOrigemProjeto, projeto: ProjetoConteudo) => {
     setAbaOrigemProjeto(origem);
@@ -1008,7 +1065,10 @@ export default function App() {
   const ocultarTopbar = activeTab === "instance-manager";
 
   return (
-    <div className="app-shell launcher-shell relative flex h-screen w-full overflow-hidden text-white">
+    <div className={cn(
+      "app-shell launcher-shell relative flex h-screen w-full overflow-hidden text-white",
+      activeTab === "profile" && "perfil-comunidade-ativa"
+    )}>
       <aside className="launcher-side-menu relative z-20 flex w-[81px] shrink-0 flex-col">
         <div className="absolute inset-x-0 top-0 flex h-[50px] items-center justify-center gap-1">
           <button
@@ -1085,11 +1145,13 @@ export default function App() {
               onClick={handleProfileClick}
               className={cn(
                 "flex h-11 w-11 items-center justify-center border transition-colors",
-                user
+                activeTab === "profile"
+                  ? "border-emerald-400/45 bg-emerald-500/12"
+                  : user
                   ? "border-emerald-400/40 bg-[#171717]"
                   : "border-white/15 bg-[#171717] hover:border-white/30"
               )}
-              title={user ? user.name : "Contas Minecraft"}
+              title="Abrir perfil da comunidade"
             >
               {user ? (
                 <img
@@ -1316,7 +1378,7 @@ export default function App() {
           className={cn(
             "flex-1 overflow-y-auto scrollbar-hide",
             !ocultarTopbar && "launcher-painel-conteudo",
-            activeTab === "instance-manager" ? "" : "px-6 pb-24 pt-6"
+            activeTab === "instance-manager" || activeTab === "profile" ? "" : "px-6 pb-24 pt-6"
           )}
         >
           <Suspense fallback={<EsqueletoAba />}>
@@ -1408,6 +1470,27 @@ export default function App() {
               </motion.div>
             )}
 
+            {activeTab === "profile" && (
+              <motion.div
+                key="profile"
+                initial={{ opacity: 0, y: 10 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -10 }}
+                className="min-h-full"
+              >
+                <PerfilComunidade
+                  key={perfilVisualizadoId ?? "me"}
+                  instances={instances}
+                  minecraftUuid={user?.uuid}
+                  perfilId={perfilVisualizadoId}
+                  onAbrirInstancia={abrirGerenciadorInstancia}
+                  onAbrirBiblioteca={() => navegarParaAba("instances")}
+                  onGerenciarContas={() => setMenuContaAberto(true)}
+                  onAbrirPerfil={abrirPerfilSocial}
+                />
+              </motion.div>
+            )}
+
             {activeTab === "explore" && (
               <motion.div
                 key="explore"
@@ -1486,7 +1569,7 @@ export default function App() {
                 animate={{ opacity: 1, scale: 1 }}
                 exit={{ opacity: 0, scale: 0.98 }}
               >
-                <SkinManager user={user} />
+                <TelaSkinsRecuperavel user={user} />
               </motion.div>
             )}
 
@@ -1686,6 +1769,7 @@ export default function App() {
               }
               onAlterarChatAberto={setChatSocialAberto}
               onAbrirAtividadeAmigo={abrirAtividadeAmigo}
+              onAbrirPerfil={abrirPerfilSocial}
               recuado={ehTelaXl && painelSocialRecuado}
               onAlternarRecuo={
                 ehTelaXl ? () => setPainelSocialRecuado((anterior) => !anterior) : undefined
