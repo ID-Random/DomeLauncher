@@ -11,7 +11,33 @@ pub(crate) fn caminho_instancia_por_id(
         return Err("Identificador de instância inválido.".to_string());
     }
 
-    Ok(state.caminho_instancias()?.join(id))
+    let caminho_padrao = state.caminho_instancias()?.join(id);
+    if caminho_padrao.exists() {
+        return Ok(caminho_padrao);
+    }
+
+    // Fallback de resiliência: se a pasta com o ID exato não existir diretamente,
+    // busca entre as pastas existentes uma cujo instance.json tenha esse ID.
+    if let Ok(raiz) = state.caminho_instancias() {
+        if let Ok(entries) = std::fs::read_dir(&raiz) {
+            for entry in entries.flatten() {
+                if entry.path().is_dir() {
+                    let config_path = entry.path().join("instance.json");
+                    if config_path.exists() {
+                        if let Ok(conteudo) = std::fs::read_to_string(&config_path) {
+                            if let Ok(instancia) = serde_json::from_str::<Instance>(&conteudo) {
+                                if instancia.id == id {
+                                    return Ok(entry.path());
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(caminho_padrao)
 }
 
 fn identificador_instancia_valido(id: &str) -> bool {
@@ -39,7 +65,14 @@ pub(crate) fn obter_instancia_por_id(
         .get_instances()
         .map_err(|e| e.to_string())?
         .into_iter()
-        .find(|instancia| instancia.id == instance_id)
+        .find(|instancia| {
+            instancia.id == instance_id
+                || instancia
+                    .path
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .is_some_and(|nome| nome == instance_id)
+        })
         .ok_or_else(|| "Instância não encontrada".to_string())
 }
 
@@ -123,11 +156,7 @@ fn obter_mapa_instancias_em_execucao(
             continue;
         }
 
-        if state.obter_pid_instancia(instance_id).is_some() {
-            resultados.insert(instance_id.clone(), true);
-            continue;
-        }
-
+        let tinha_pid_registrado = state.obter_pid_instancia(instance_id).is_some();
         let instance_path_normalizado = normalizar_caminho_processo(&instance_path);
         let caminho_canonico_normalizado = instance_path
             .canonicalize()
@@ -157,6 +186,15 @@ fn obter_mapa_instancias_em_execucao(
             continue;
         }
 
+        if tinha_pid_registrado {
+            state.remover_pid_instancia(instance_id);
+            if let Err(erro) = state.finalizar_tempo_jogado_instancia(instance_id) {
+                eprintln!(
+                    "[Instâncias] Aviso: falha ao finalizar sessão obsoleta da instância {}: {}",
+                    instance_id, erro
+                );
+            }
+        }
         resultados.insert(instance_id.clone(), false);
     }
 
@@ -240,15 +278,18 @@ pub fn kill_instance(instance_id: String, state: State<LauncherState>) -> Result
         }
     }
 
-    if finalizados == 0 {
-        return Err("Nenhum processo do Minecraft foi encontrado para essa instância.".to_string());
-    }
-
     state.remover_pid_instancia(&instance_id);
     if let Err(erro) = state.finalizar_tempo_jogado_instancia(&instance_id) {
         eprintln!(
             "[Instâncias] Aviso: falha ao finalizar tempo jogado da instância {}: {}",
             instance_id, erro
+        );
+    }
+
+    if finalizados == 0 {
+        println!(
+            "[Instâncias] A instância {} já estava encerrada; o estado obsoleto foi removido.",
+            instance_id
         );
     }
     Ok(())
@@ -1013,5 +1054,47 @@ mod testes {
         assert!(!identificador_instancia_valido("C:\\Windows"));
         assert!(!identificador_instancia_valido(".."));
         assert!(!identificador_instancia_valido(""));
+    }
+
+    #[test]
+    fn recupera_pasta_quando_id_difere_do_nome_do_diretorio() {
+        let temp_dir =
+            std::env::temp_dir().join(format!("dome_test_ghost_{}", uuid::Uuid::new_v4()));
+        let instances_dir = temp_dir.join("instances");
+        std::fs::create_dir_all(&instances_dir).unwrap();
+
+        let folder_path = instances_dir.join("pasta_renomeada");
+        std::fs::create_dir_all(&folder_path).unwrap();
+
+        let instance_json = r#"{
+            "id": "id_antigo_fantasma",
+            "name": "Meu Modpack",
+            "version": "1.20.1",
+            "mcType": "release",
+            "path": "C:\\caminho\\antigo\\invalido",
+            "created": "2024-01-01T00:00:00Z"
+        }"#;
+        std::fs::write(folder_path.join("instance.json"), instance_json).unwrap();
+
+        let state = crate::launcher::LauncherState::new();
+        state
+            .atualizar_caminho_instancias(instances_dir.clone())
+            .unwrap();
+
+        // 1. caminho_instancia_por_id deve resolver para pasta_renomeada mesmo buscando por "id_antigo_fantasma"
+        let caminho = super::caminho_instancia_por_id(&state, "id_antigo_fantasma").unwrap();
+        assert_eq!(caminho, folder_path);
+
+        // 2. get_instances deve autocurar o instance.id para "pasta_renomeada" e o path para folder_path
+        let instancias = state.get_instances().unwrap();
+        assert_eq!(instancias.len(), 1);
+        assert_eq!(instancias[0].id, "pasta_renomeada");
+        assert_eq!(instancias[0].path, folder_path);
+
+        // 3. O arquivo em disco deve ter sido curado
+        let conteudo_curado = std::fs::read_to_string(folder_path.join("instance.json")).unwrap();
+        assert!(conteudo_curado.contains(r#""id": "pasta_renomeada""#));
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
     }
 }

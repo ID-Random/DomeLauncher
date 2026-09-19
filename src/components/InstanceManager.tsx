@@ -25,6 +25,7 @@ import {
   Pencil,
   Save,
   Users,
+  Heart,
 } from "../iconesPixelados";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -46,6 +47,7 @@ import {
   SeparadorMenuContextual,
 } from "./context-menu/MenuContextual";
 import { AreaRolagemPersonalizada } from "./scroll/AreaRolagemPersonalizada";
+import { loadFavorites, saveFavorites, type FavoriteItem } from "./Favorites";
 
 interface InstanceManagerProps {
   instanceId: string;
@@ -365,6 +367,52 @@ const tipoProjetoPorFiltro = (filtro: ContentFilter): TipoProjetoCache => {
   if (filtro === "shaders") return "shader";
   return "mod";
 };
+
+async function obterDownloadsFavorito(favorito: FavoriteItem): Promise<number | undefined> {
+  try {
+    if (favorito.source === "modrinth") {
+      const resposta = await fetch(`https://api.modrinth.com/v2/project/${favorito.id}`);
+      if (!resposta.ok) return undefined;
+      const dados = await resposta.json();
+      return typeof dados.downloads === "number" ? dados.downloads : undefined;
+    }
+
+    const dados = await invoke<{ downloads?: number }>("buscar_detalhes_projeto_curseforge", {
+      projectId: favorito.id,
+    });
+    return typeof dados.downloads === "number" ? dados.downloads : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+async function hidratarDownloadsFavoritos(favoritos: FavoriteItem[]): Promise<FavoriteItem[]> {
+  const pendentes = favoritos.filter((favorito) => favorito.downloads === undefined);
+  if (pendentes.length === 0) return favoritos;
+
+  const downloadsPorId = new Map<string, number>();
+  let proximoIndice = 0;
+  const trabalhadores = Array.from({ length: Math.min(4, pendentes.length) }, async () => {
+    while (proximoIndice < pendentes.length) {
+      const favorito = pendentes[proximoIndice];
+      proximoIndice += 1;
+      const downloads = await obterDownloadsFavorito(favorito);
+      if (downloads !== undefined) downloadsPorId.set(favorito.id, downloads);
+    }
+  });
+  await Promise.all(trabalhadores);
+  if (downloadsPorId.size === 0) return favoritos;
+
+  const todosAtualizados = loadFavorites().map((favorito) => {
+    const downloads = downloadsPorId.get(favorito.id);
+    return downloads === undefined ? favorito : { ...favorito, downloads };
+  });
+  saveFavorites(todosAtualizados);
+  return favoritos.map((favorito) => {
+    const downloads = downloadsPorId.get(favorito.id);
+    return downloads === undefined ? favorito : { ...favorito, downloads };
+  });
+}
 
 const montarChaveCacheConteudo = (
   instanceId: string,
@@ -1290,6 +1338,13 @@ export default function InstanceManager({
       };
       const tipoConteudo = typeMap[activeFilter];
       const loaderInstancia = instanceDetails.loaderType?.trim().toLowerCase();
+      const promessaFavoritos = acumular
+        ? Promise.resolve([] as FavoriteItem[])
+        : hidratarDownloadsFavoritos(loadFavorites()
+            .filter((item) => item.type === tipoConteudo)
+            .filter((item) => fontesAtivas.includes(item.source))
+            .filter((item) => !query.trim()
+              || `${item.title} ${item.author}`.toLowerCase().includes(query.trim().toLowerCase())));
       const limiteConsulta = fontesConsultadas.length > 1
         ? LIMITE_CORRESPONDENCIA_FONTES
         : LIMITE_RESULTADOS_BUSCA;
@@ -1322,14 +1377,12 @@ export default function InstanceManager({
           return { fonte, resultados };
         })
       );
-
       if (lastSearch.current.query !== assinaturaBusca.query
           || lastSearch.current.filter !== assinaturaBusca.filter
           || lastSearch.current.source !== assinaturaBusca.source
           || lastSearch.current.opcoes !== assinaturaBusca.opcoes) {
         return;
       }
-
       const sucessos = respostas.flatMap((resposta) => resposta.status === "fulfilled" ? [resposta.value] : []);
       if (sucessos.length === 0) {
         const motivos = respostas.flatMap((resposta) =>
@@ -1373,7 +1426,24 @@ export default function InstanceManager({
           .filter((item) => obterChavesCorrespondenciaBusca(item)
             .some((chave) => chavesPrincipaisPorFonte[outraFonte].has(chave)));
       });
-      const novosResultados = [...resultadosPrincipais, ...resultadosComplementares];
+      const resultadosFavoritos = (await promessaFavoritos)
+        .map((item): VarianteResultadoBusca => ({
+          id: item.id,
+          title: item.title,
+          description: item.description,
+          icon_url: item.icon_url || undefined,
+          author: item.author,
+          slug: item.slug,
+          project_type: tipoConteudo,
+          source: item.source,
+          downloads: item.downloads,
+        }))
+        .filter((item) => !projetoJaInstalado(criarResultadoBuscaMesclado({ [item.source]: item })));
+      const novosResultados = [
+        ...resultadosFavoritos,
+        ...resultadosPrincipais,
+        ...resultadosComplementares,
+      ];
 
       setTemMaisResultados(fontesAtivas.some((fonte) => temMaisPorFonteBuscaRef.current[fonte]));
       setSearchResults((atuais) => {
@@ -2324,6 +2394,7 @@ export default function InstanceManager({
       .map((item) => (item.projectId ? String(item.projectId).toLowerCase() : ""))
       .filter((item) => item.length > 0)
   );
+  const favoritosAtuais = loadFavorites();
 
   const projetoJaInstalado = (item: SearchResult) => {
     const variantes = extrairVariantesResultadoBusca(item);
@@ -2332,6 +2403,22 @@ export default function InstanceManager({
     return currentContent.some((instalado) => variantes.some((variante) =>
       arquivoPodePertencerAoProjeto(instalado.fileName, variante.slug)
     ));
+  };
+
+  const projetoFavorito = (item: SearchResult) => {
+    const variantes = extrairVariantesResultadoBusca(item);
+    const idsProjeto = new Set(variantes.map((variante) => variante.id));
+    const chavesProjeto = new Set(variantes.flatMap((variante) => [
+      normalizarIdentificadorBusca(variante.slug),
+      normalizarIdentificadorBusca(variante.title),
+    ]).filter(Boolean));
+
+    return favoritosAtuais.some((favorito) => {
+      if (idsProjeto.has(favorito.id)) return true;
+      return [favorito.slug, favorito.title]
+        .map(normalizarIdentificadorBusca)
+        .some((chave) => chave.length > 0 && chavesProjeto.has(chave));
+    });
   };
 
   // Filtros disponíveis baseado no tipo de instância
@@ -3195,7 +3282,12 @@ export default function InstanceManager({
                     {searchResults.map((item) => (
                       <div
                         key={item.chave}
-                        className="bg-white/3 hover:bg-white/5 border border-white/5 rounded-xl p-4 flex gap-4 transition-all group"
+                        className={cn(
+                          "rounded-xl border p-4 flex gap-4 transition-all group",
+                          projetoFavorito(item)
+                            ? "border-pink-400/55 bg-pink-500/[0.06] shadow-[inset_0_0_0_1px_rgba(244,114,182,0.08)] hover:bg-pink-500/[0.09]"
+                            : "border-white/5 bg-white/3 hover:bg-white/5"
+                        )}
                       >
                         <img
                           src={item.icon_url || `https://api.dicebear.com/9.x/shapes/svg?seed=${item.id}`}
@@ -3206,24 +3298,34 @@ export default function InstanceManager({
                         <div className="flex-1 min-w-0">
                           <div className="flex items-start justify-between gap-4">
                             <div>
-                              <button
-                                type="button"
-                                onClick={() => abrirPaginaProjeto(item)}
-                                className="cursor-pointer text-left font-bold text-white transition-colors hover:text-emerald-400"
-                              >
-                                {item.title}
-                              </button>
-                              <p className="flex flex-wrap items-center gap-1 text-xs text-white/40">
+                              <div className="flex items-center gap-2">
+                                <button
+                                  type="button"
+                                  onClick={() => abrirPaginaProjeto(item)}
+                                  className="cursor-pointer text-left font-bold text-white transition-colors hover:text-emerald-400"
+                                >
+                                  {item.title}
+                                </button>
+                                {projetoFavorito(item) && (
+                                  <Heart
+                                    size={14}
+                                    fill="currentColor"
+                                    aria-label="Conteúdo favorito"
+                                    className="shrink-0 text-pink-400 drop-shadow-[0_0_5px_rgba(244,114,182,0.45)]"
+                                  />
+                                )}
+                              </div>
+                              <div className="flex flex-wrap items-center gap-1 text-xs text-white/40">
                                 <span>por {item.author} • via</span>
                                 {item.fontes.map((fonte) => (
                                   <span
                                     key={fonte}
                                     className={fonte === "modrinth" ? "text-emerald-400" : "text-orange-400"}
                                   >
-                                    {fonte}
+                                    {fonte === "modrinth" ? "Modrinth" : "CurseForge"}
                                   </span>
                                 ))}
-                              </p>
+                              </div>
                             </div>
 
                             <div className="flex shrink-0 items-center gap-2">
@@ -3270,7 +3372,8 @@ export default function InstanceManager({
                             <span className="flex items-center gap-1">
                               <Download size={10} />
                               {(() => {
-                                const qtdDownloads = item.downloads || 0;
+                                if (item.downloads === undefined) return "—";
+                                const qtdDownloads = item.downloads;
                                 if (qtdDownloads >= 1000000) return `${(qtdDownloads / 1000000).toFixed(1)}M`;
                                 if (qtdDownloads >= 1000) return `${(qtdDownloads / 1000).toFixed(1)}K`;
                                 return qtdDownloads;

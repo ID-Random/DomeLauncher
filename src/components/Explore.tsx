@@ -250,6 +250,7 @@ export default function Explore({
   const [carregandoCategorias, setCarregandoCategorias] = useState(false);
   const [erroCategorias, setErroCategorias] = useState(false);
   const [ordenacao, setOrdenacao] = useState<OrdenacaoBusca>("relevancia");
+  const [fonte, setFonte] = useState<Source | "ambas">("ambas");
 
   const hasLoaded = useRef(false);
   const lastSearch = useRef({ query: "", contentType: "", filtros: "" });
@@ -480,7 +481,7 @@ export default function Explore({
   }, [buscarEmFontes]);
 
   const searchContent = useCallback(async (q: string, type: ContentType, filtros: FiltrosBusca) => {
-    const chaveFiltros = JSON.stringify(filtros);
+    const chaveFiltros = JSON.stringify({ ...filtros, fonte });
     if (
       lastSearch.current.query === q &&
       lastSearch.current.contentType === type &&
@@ -492,7 +493,10 @@ export default function Explore({
     const geracao = geracaoBuscaRef.current + 1;
     geracaoBuscaRef.current = geracao;
     proximosOffsetsRef.current = { modrinth: 0, curseforge: 0 };
-    temMaisPorFonteRef.current = { modrinth: true, curseforge: true };
+    temMaisPorFonteRef.current = {
+      modrinth: fonte === "ambas" || fonte === "modrinth",
+      curseforge: fonte === "ambas" || fonte === "curseforge",
+    };
     carregandoMaisRef.current = false;
 
     setLoading(true);
@@ -500,7 +504,8 @@ export default function Explore({
     setTemMaisResultados(true);
     setFalhaCarregamentoMais(false);
     try {
-      const resposta = await buscarEmFontes(q, type, FONTES, filtros);
+      const fontesSelecionadas = fonte === "ambas" ? FONTES : [fonte];
+      const resposta = await buscarEmFontes(q, type, fontesSelecionadas, filtros);
 
       if (geracaoBuscaRef.current !== geracao) return;
       atualizarPaginacao(resposta);
@@ -515,7 +520,7 @@ export default function Explore({
     } finally {
       if (geracaoBuscaRef.current === geracao) setLoading(false);
     }
-  }, [atualizarPaginacao, buscarEmFontes]);
+  }, [atualizarPaginacao, buscarEmFontes, fonte]);
 
   const carregarMaisResultados = useCallback(async () => {
     if (loading || !temMaisResultados || carregandoMaisRef.current) return;
@@ -682,6 +687,7 @@ export default function Explore({
         type: contentType,
         source: variante.source,
         slug: variante.slug,
+        downloads: variante.downloads,
       };
       addFavorite(favItem);
       setFavorites((prev) => new Set(prev).add(item.id));
@@ -714,6 +720,7 @@ export default function Explore({
     setCategoriasNegadas([]);
     setSeletorCategoriasAberto(false);
     setOrdenacao("relevancia");
+    setFonte("ambas");
   };
 
   const categoriasDaFonte = fonteCategorias
@@ -1242,6 +1249,31 @@ export default function Explore({
                     />
                   </div>
                 </div>
+
+                <label className="order-4 min-w-0">
+                  <span className="mb-1.5 block text-[10px] font-bold uppercase tracking-wider text-white/35">
+                    Fonte
+                  </span>
+                  <div className="relative">
+                    <select
+                      aria-label="Fonte dos resultados"
+                      value={fonte}
+                      onChange={(evento) => setFonte(evento.target.value as Source | "ambas")}
+                      className={cn(
+                        "w-full appearance-none rounded-xl border border-white/10 bg-[#171717]",
+                        "px-3 py-2 pr-9 text-xs font-bold text-white outline-none focus:border-emerald-500/50"
+                      )}
+                    >
+                      <option value="ambas">Modrinth e CurseForge</option>
+                      <option value="modrinth">Somente Modrinth</option>
+                      <option value="curseforge">Somente CurseForge</option>
+                    </select>
+                    <ChevronDown
+                      size={14}
+                      className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-white/35"
+                    />
+                  </div>
+                </label>
               </div>
             </motion.div>
           )}

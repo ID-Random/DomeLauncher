@@ -186,7 +186,7 @@ async function encontrarInstanciaDaAtividade(
 const CHAVE_ULTIMA_INSTANCIA = "dome:ultima-instancia-iniciada";
 const CHAVE_NOVIDADES_PENDENTES = "dome:novidades-pendentes";
 const CHAVE_ULTIMA_NOVIDADE_EXIBIDA = "dome:ultima-novidade-exibida";
-const INTERVALO_VERIFICACAO_INSTANCIAS_MS = 20 * 1000;
+const INTERVALO_VERIFICACAO_INSTANCIAS_MS = 2 * 1000;
 const LIMITE_HISTORICO_NAVEGACAO = 50;
 type TipoExplorePresence = "modpack" | "mod" | "resourcepack" | "shader";
 type FonteExplorePresence = "modrinth" | "curseforge" | "ambas";
@@ -247,7 +247,6 @@ export default function App() {
   const [painelSocialRecuado, setPainelSocialRecuado] = useState(true);
   const ehTelaXl = useBreakpointXl();
   const ultimaAssinaturaPresence = useRef<string>("");
-  const falhasDeteccaoExecucao = useRef<Record<string, number>>({});
   const menuContaRef = useRef<HTMLDivElement | null>(null);
   const alterarAba = useCallback((aba: string) => {
     startTransition(() => setActiveTab(aba));
@@ -636,17 +635,6 @@ export default function App() {
         idsInstancias.map((id) => [id, Boolean(mapa?.[id])])
       );
       setMapaExecucao((anterior) => {
-        for (const id of idsInstancias) {
-          if (mapaNormalizado[id]) {
-            falhasDeteccaoExecucao.current[id] = 0;
-            continue;
-          }
-          if (anterior[id]) {
-            const falhas = (falhasDeteccaoExecucao.current[id] ?? 0) + 1;
-            falhasDeteccaoExecucao.current[id] = falhas;
-            if (falhas < 2) mapaNormalizado[id] = true;
-          }
-        }
         const houveEncerramento = idsInstancias.some(
           (id) => Boolean(anterior[id]) && !Boolean(mapaNormalizado[id])
         );
@@ -845,7 +833,6 @@ export default function App() {
     setInstanciaSendoEncerrada(id);
     try {
       await invoke("kill_instance", { instanceId: id });
-      falhasDeteccaoExecucao.current[id] = 2;
       setMapaExecucao((anterior) => ({ ...anterior, [id]: false }));
       await fetchInstances();
       await verificarInstanciasEmExecucao();
@@ -1067,7 +1054,7 @@ export default function App() {
     { id: "favorites", icon: Heart, label: "Favoritos" },
     { id: "skins", icon: Avatar, label: "Skins" },
   ];
-  const ocultarTopbar = activeTab === "instance-manager";
+  const ocultarTopbar = false;
 
   return (
     <div className={cn(
@@ -1620,7 +1607,8 @@ export default function App() {
               </motion.div>
             )}
 
-            {activeTab === "instance-manager" &&
+            {(activeTab === "instance-manager" ||
+              (activeTab === "project-detail" && abaOrigemProjeto === "instance-manager")) &&
               managedInstanceId &&
               !atividadeSocialDetalhe &&
               !(projetoDetalhe && abaOrigemProjeto === "instances") && (
@@ -1629,7 +1617,10 @@ export default function App() {
                 initial={{ opacity: 0, scale: 0.98 }}
                 animate={{ opacity: 1, scale: 1 }}
                 exit={{ opacity: 0, scale: 0.98 }}
-                className="h-full"
+                className={cn(
+                  "h-full",
+                  activeTab === "project-detail" && "hidden"
+                )}
               >
                 <InstanceManager
                   instanceId={managedInstanceId}
