@@ -13,7 +13,10 @@ import {
   Image,
   Sparkles,
   Loader2,
+  Check,
+  ChevronDown,
   ChevronLeft,
+  Filter,
   X,
   FolderOpen,
   FileText,
@@ -28,8 +31,13 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { cn } from "../lib/utils";
 import { ICONE_DOME_LAUNCHER } from "../lib/imagemProjeto";
 import { arquivoPodePertencerAoProjeto } from "../lib/conteudoInstalado";
+import { EVENTO_NAVEGACAO_INTERNA, type DirecaoNavegacaoInterna } from "../lib/navegacaoInterna";
 import Configuracao from "../pages/instance/Configuracao";
+import Servidores from "../pages/instance/Servidores";
 import type { ProjetoConteudo } from "./ProjetoDetalheModal";
+import RevisaoInstalacaoConteudo, {
+  type ItemPlanoInstalacaoConteudo,
+} from "./instance/RevisaoInstalacaoConteudo";
 import EditorIconeModal from "./editor-icone/EditorIconeModal";
 import {
   CabecalhoMenuContextual,
@@ -134,7 +142,7 @@ interface ConteudoInstaladoDetalhado {
   enabled: boolean;
 }
 
-interface SearchResult {
+interface VarianteResultadoBusca {
   id: string;
   title: string;
   description: string;
@@ -142,9 +150,44 @@ interface SearchResult {
   author: string;
   downloads?: number;
   slug: string;
-  project_type: string;
+  project_type: TipoProjetoCache;
+  source: BrowseSource;
   latest_version?: string;
   file_name?: string;
+}
+
+interface SearchResult extends VarianteResultadoBusca {
+  chave: string;
+  fontes: BrowseSource[];
+  variantes: Partial<Record<BrowseSource, VarianteResultadoBusca>>;
+}
+
+interface ResultadoBuscaOnline {
+  id?: string | number;
+  name?: string;
+  title?: string;
+  description?: string;
+  iconUrl?: string;
+  icon_url?: string;
+  author?: string;
+  downloadCount?: number;
+  download_count?: number;
+  slug?: string;
+  projectType?: TipoProjetoCache;
+  project_type?: TipoProjetoCache;
+  platform?: BrowseSource;
+  latestVersion?: string;
+  latest_version?: string;
+  fileName?: string;
+  file_name?: string;
+  ocultoPorCategoria?: boolean;
+}
+
+interface CategoriaBuscaOnline {
+  id: string;
+  nome: string;
+  modrinth?: string;
+  curseforge?: number;
 }
 
 interface WorldInfo {
@@ -167,11 +210,129 @@ interface ConfiguracoesGlobais {
   close_on_launch?: boolean;
 }
 
-type ContentTab = "content" | "worlds" | "configuration" | "logs";
+type ContentTab = "content" | "worlds" | "servers" | "configuration" | "logs";
 type ContentFilter = "mods" | "resourcepacks" | "shaders";
 type ViewMode = "installed" | "browse";
 type BrowseSource = "modrinth" | "curseforge";
+type FontesBusca = Record<BrowseSource, boolean>;
 type TipoProjetoCache = "mod" | "resourcepack" | "shader";
+type OrdenacaoBusca = "relevancia" | "popularidade" | "downloads" | "atualizados" | "recentes";
+
+const ORDENACOES_BUSCA: Array<{ id: OrdenacaoBusca; nome: string }> = [
+  { id: "relevancia", nome: "Relevância" },
+  { id: "popularidade", nome: "Popularidade" },
+  { id: "downloads", nome: "Mais baixados" },
+  { id: "atualizados", nome: "Atualizados recentemente" },
+  { id: "recentes", nome: "Mais novos" },
+];
+
+const FONTES_BUSCA: BrowseSource[] = ["modrinth", "curseforge"];
+const FONTE_BUSCA_PRIORITARIA: BrowseSource = "modrinth";
+const FONTES_BUSCA_INICIAIS: FontesBusca = {
+  modrinth: false,
+  curseforge: false,
+};
+const LIMITE_RESULTADOS_BUSCA = 20;
+const LIMITE_CORRESPONDENCIA_FONTES = 50;
+
+const normalizarIdentificadorBusca = (valor: string) =>
+  valor
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "");
+
+const obterChavesCorrespondenciaBusca = (item: VarianteResultadoBusca) => {
+  const chaves = [`id:${item.source}:${item.id}`];
+  const slug = normalizarIdentificadorBusca(item.slug);
+  const titulo = normalizarIdentificadorBusca(item.title);
+
+  if (slug) chaves.push(`slug:${slug}`);
+  if (titulo) chaves.push(`titulo:${titulo}`);
+  return chaves;
+};
+
+const mapearResultadoBuscaOnline = (
+  item: ResultadoBuscaOnline,
+  tipoPadrao: TipoProjetoCache
+): VarianteResultadoBusca => {
+  const id = String(item.id || "");
+  return {
+    id,
+    title: String(item.name || item.title || "Sem nome"),
+    description: String(item.description || ""),
+    icon_url: item.iconUrl || item.icon_url || undefined,
+    author: String(item.author || "Desconhecido"),
+    downloads:
+      typeof item.downloadCount === "number"
+        ? item.downloadCount
+        : typeof item.download_count === "number"
+          ? item.download_count
+          : undefined,
+    slug: String(item.slug || "").trim() || id.trim(),
+    project_type: item.projectType || item.project_type || tipoPadrao,
+    source: item.platform === "curseforge" ? "curseforge" : "modrinth",
+    latest_version: item.latestVersion || item.latest_version || undefined,
+    file_name: item.fileName || item.file_name || undefined,
+  };
+};
+
+const criarResultadoBuscaMesclado = (
+  variantes: Partial<Record<BrowseSource, VarianteResultadoBusca>>
+): SearchResult => {
+  const principal = variantes[FONTE_BUSCA_PRIORITARIA] || variantes.curseforge;
+  if (!principal) throw new Error("Resultado sem plataforma de origem.");
+
+  const fontes = FONTES_BUSCA.filter((fonte) => variantes[fonte]);
+  const chave = obterChavesCorrespondenciaBusca(principal).find((valor) => !valor.startsWith("id:"))
+    || `id:${principal.source}:${principal.id}`;
+  const downloads = fontes.reduce((total, fonte) => total + (variantes[fonte]?.downloads || 0), 0);
+
+  return {
+    ...principal,
+    chave,
+    downloads,
+    fontes,
+    variantes,
+  };
+};
+
+const mesclarResultadosBusca = (
+  itens: VarianteResultadoBusca[],
+  ordenacao: OrdenacaoBusca
+): SearchResult[] => {
+  const grupos: Array<Partial<Record<BrowseSource, VarianteResultadoBusca>>> = [];
+  const indicePorChave = new Map<string, number>();
+
+  itens.forEach((item) => {
+    const chaves = obterChavesCorrespondenciaBusca(item);
+    const indice = chaves.map((chave) => indicePorChave.get(chave)).find((valor) => valor !== undefined);
+
+    if (indice === undefined) {
+      const novoIndice = grupos.length;
+      grupos.push({ [item.source]: item });
+      chaves.forEach((chave) => indicePorChave.set(chave, novoIndice));
+      return;
+    }
+
+    grupos[indice][item.source] = item;
+    chaves.forEach((chave) => indicePorChave.set(chave, indice));
+  });
+
+  const resultados = grupos.map(criarResultadoBuscaMesclado);
+  if (ordenacao === "downloads") {
+    resultados.sort((a, b) => (b.downloads || 0) - (a.downloads || 0));
+  }
+  return resultados;
+};
+
+const extrairVariantesResultadoBusca = (item: SearchResult): VarianteResultadoBusca[] =>
+  item.fontes.flatMap((fonte) => {
+    const variante = item.variantes[fonte];
+    return variante ? [variante] : [];
+  });
+
+const chaveSelecaoDownload = (item: SearchResult) => `${item.source}:project:${item.id}`;
 
 interface RegistroCacheConteudo {
   name: string;
@@ -196,6 +357,7 @@ const TTL_CACHE_CONTEUDO_MS = 1000 * 60 * 60 * 24 * 30;
 const TTL_CACHE_ATUALIZACAO_MS = 1000 * 60 * 60 * 6;
 const TTL_RETENTATIVA_ENRIQUECIMENTO_MS = 1000 * 60 * 60 * 24;
 const LIMITE_ENRIQUECIMENTO_POR_CICLO = 8;
+const LIMITE_CATEGORIAS_BUSCA = 10;
 const VERSAO_IDENTIFICACAO_CONTEUDO = 2;
 
 const tipoProjetoPorFiltro = (filtro: ContentFilter): TipoProjetoCache => {
@@ -339,7 +501,10 @@ export default function InstanceManager({
   const [activeTab, setActiveTab] = useState<ContentTab>("content");
   const [activeFilter, setActiveFilter] = useState<ContentFilter>("mods");
   const [viewMode, setViewMode] = useState<ViewMode>("installed");
-  const [browseSource, setBrowseSource] = useState<BrowseSource>("modrinth");
+  const [fontesBuscaSelecionadas, setFontesBuscaSelecionadas] = useState<FontesBusca>({
+    ...FONTES_BUSCA_INICIAIS,
+  });
+  const [seletorFontesAberto, setSeletorFontesAberto] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [installedMods, setInstalledMods] = useState<InstalledMod[]>([]);
   const [installedResourcePacks, setInstalledResourcePacks] = useState<InstalledMod[]>([]);
@@ -349,7 +514,24 @@ export default function InstanceManager({
   const [searching, setSearching] = useState(false);
   const [carregandoMaisResultados, setCarregandoMaisResultados] = useState(false);
   const [temMaisResultados, setTemMaisResultados] = useState(true);
-  const [installing, setInstalling] = useState<string | null>(null);
+  const [filtrosBuscaAbertos, setFiltrosBuscaAbertos] = useState(false);
+  const [ordenacaoBusca, setOrdenacaoBusca] = useState<OrdenacaoBusca>("relevancia");
+  const [categoriasBusca, setCategoriasBusca] = useState<CategoriaBuscaOnline[]>([]);
+  const [categoriasIncluidas, setCategoriasIncluidas] = useState<Set<string>>(new Set());
+  const [categoriasNegadas, setCategoriasNegadas] = useState<Set<string>>(new Set());
+  const [seletorCategoriasAberto, setSeletorCategoriasAberto] = useState(false);
+  const [carregandoCategorias, setCarregandoCategorias] = useState(false);
+  const [filaInstalacao, setFilaInstalacao] = useState<Record<string, SearchResult>>({});
+  const [revisaoInstalacaoAberta, setRevisaoInstalacaoAberta] = useState(false);
+  const [planoInstalacao, setPlanoInstalacao] = useState<ItemPlanoInstalacaoConteudo[]>([]);
+  const [carregandoPlanoInstalacao, setCarregandoPlanoInstalacao] = useState(false);
+  const [instalandoFila, setInstalandoFila] = useState(false);
+  const [erroPlanoInstalacao, setErroPlanoInstalacao] = useState<string | null>(null);
+  const [progressoInstalacao, setProgressoInstalacao] = useState<{
+    atual: number;
+    total: number;
+    nome: string;
+  } | null>(null);
   const [worlds, setWorlds] = useState<WorldInfo[]>([]);
   const [logs, setLogs] = useState<LogFile[]>([]);
   const [selectedLog, setSelectedLog] = useState<string | null>(null);
@@ -386,20 +568,34 @@ export default function InstanceManager({
   const [editorIconeAberto, setEditorIconeAberto] = useState(false);
   const editorIconeAbriuEdicaoRef = useRef(false);
 
-  const lastSearch = useRef({ query: "", filter: "", source: "" });
+  const lastSearch = useRef({ query: "", filter: "", source: "", opcoes: "" });
   const carregandoMaisResultadosRef = useRef(false);
   const listaConteudoRef = useRef<HTMLDivElement | null>(null);
+  const seletorFontesRef = useRef<HTMLDivElement | null>(null);
+  const seletorCategoriasRef = useRef<HTMLDivElement | null>(null);
+  const proximosOffsetsBuscaRef = useRef<Record<BrowseSource, number>>({ modrinth: 0, curseforge: 0 });
+  const temMaisPorFonteBuscaRef = useRef<Record<BrowseSource, boolean>>({ modrinth: true, curseforge: true });
+  const geracaoBuscaRef = useRef(0);
   const nomeInstanciaRef = useRef<HTMLInputElement | null>(null);
   const arrasteIndicadorRef = useRef<{
     ponteiroId: number;
     inicioY: number;
     scrollInicial: number;
   } | null>(null);
+  const assinaturaCategoriasIncluidas = Array.from(categoriasIncluidas).sort().join("|");
+  const assinaturaCategoriasNegadas = Array.from(categoriasNegadas).sort().join("|");
+  const assinaturaCategorias = `${assinaturaCategoriasIncluidas}::${assinaturaCategoriasNegadas}`;
+  const assinaturaFontesBusca = FONTES_BUSCA.filter((fonte) => fontesBuscaSelecionadas[fonte]).join("|");
 
   useEffect(() => {
     setActiveTab("content");
     setActiveFilter("mods");
     setViewMode("installed");
+    setFilaInstalacao({});
+    setCategoriasIncluidas(new Set());
+    setCategoriasNegadas(new Set());
+    setSeletorCategoriasAberto(false);
+    setOrdenacaoBusca("relevancia");
     loadInstanceDetails();
   }, [instanceId]);
 
@@ -426,27 +622,106 @@ export default function InstanceManager({
     if (viewMode === "browse") {
       searchContent(searchQuery);
     }
-  }, [viewMode, activeFilter, browseSource, instanceDetails?.version, instanceDetails?.loaderType]);
+  }, [
+    viewMode,
+    activeFilter,
+    assinaturaFontesBusca,
+    instanceDetails?.version,
+    instanceDetails?.loaderType,
+    ordenacaoBusca,
+    assinaturaCategorias,
+  ]);
+
+  useEffect(() => {
+    if (viewMode !== "browse") return;
+
+    const carregarCategoriasBusca = async () => {
+      setCarregandoCategorias(true);
+      try {
+        const tipoConteudo = tipoProjetoPorFiltro(activeFilter);
+        const categorias = await invoke<CategoriaBuscaOnline[]>("listar_categorias_busca_online", {
+          contentType: tipoConteudo,
+        });
+        setCategoriasBusca(categorias);
+      } catch (error) {
+        console.error("Erro ao carregar categorias:", error);
+        setCategoriasBusca([]);
+      } finally {
+        setCarregandoCategorias(false);
+      }
+    };
+
+    void carregarCategoriasBusca();
+  }, [activeFilter, viewMode]);
+
+  useEffect(() => {
+    const navegarInternamente = (evento: Event) => {
+      const direcao = (evento as CustomEvent<DirecaoNavegacaoInterna>).detail;
+      if (activeTab !== "content" || direcao !== -1) return;
+
+      if (revisaoInstalacaoAberta && !instalandoFila) {
+        evento.preventDefault();
+        setRevisaoInstalacaoAberta(false);
+        return;
+      }
+      if (viewMode === "browse") {
+        evento.preventDefault();
+        setViewMode("installed");
+      }
+    };
+
+    window.addEventListener(EVENTO_NAVEGACAO_INTERNA, navegarInternamente);
+    return () => window.removeEventListener(EVENTO_NAVEGACAO_INTERNA, navegarInternamente);
+  }, [activeTab, instalandoFila, revisaoInstalacaoAberta, viewMode]);
 
   useEffect(() => {
     setArquivosSelecionados(new Set());
+    setCategoriasIncluidas(new Set());
+    setCategoriasNegadas(new Set());
+    setSeletorCategoriasAberto(false);
     if (viewMode !== "installed") {
       setModoSelecaoLote(false);
     }
-  }, [activeFilter, viewMode, instanceId]);
+  }, [activeFilter, assinaturaFontesBusca, viewMode, instanceId]);
+
+  useEffect(() => {
+    if (!seletorFontesAberto) return;
+
+    const fecharAoClicarFora = (evento: MouseEvent) => {
+      if (!seletorFontesRef.current?.contains(evento.target as Node)) {
+        setSeletorFontesAberto(false);
+      }
+    };
+
+    document.addEventListener("mousedown", fecharAoClicarFora);
+    return () => document.removeEventListener("mousedown", fecharAoClicarFora);
+  }, [seletorFontesAberto]);
+
+  useEffect(() => {
+    if (!seletorCategoriasAberto) return;
+
+    const fecharAoClicarFora = (evento: MouseEvent) => {
+      if (!seletorCategoriasRef.current?.contains(evento.target as Node)) {
+        setSeletorCategoriasAberto(false);
+      }
+    };
+
+    document.addEventListener("mousedown", fecharAoClicarFora);
+    return () => document.removeEventListener("mousedown", fecharAoClicarFora);
+  }, [seletorCategoriasAberto]);
 
   // Debounce na busca
   useEffect(() => {
     if (viewMode !== "browse") return;
     if (lastSearch.current.query === searchQuery &&
         lastSearch.current.filter === activeFilter &&
-        lastSearch.current.source === browseSource) return;
+        lastSearch.current.source === assinaturaFontesBusca) return;
     
     const timer = setTimeout(() => {
       searchContent(searchQuery);
     }, 400);
     return () => clearTimeout(timer);
-  }, [searchQuery, viewMode]);
+  }, [assinaturaFontesBusca, searchQuery, viewMode]);
 
   const loadInstanceDetails = async () => {
     try {
@@ -971,8 +1246,35 @@ export default function InstanceManager({
   const searchContent = async (query: string, acumular = false) => {
     if (!instanceDetails) return;
     if (acumular && carregandoMaisResultadosRef.current) return;
-    const assinaturaBusca = { query, filter: activeFilter, source: browseSource };
+    const fontesMarcadas = FONTES_BUSCA.filter((fonte) => fontesBuscaSelecionadas[fonte]);
+    const fontesAtivas = fontesMarcadas.length > 0 ? fontesMarcadas : FONTES_BUSCA;
+    const fonteCategoria = fontesMarcadas.length === 1 ? fontesMarcadas[0] : null;
+    const categoriasIncluidasAtivas = categoriasBusca.filter((categoria) => categoriasIncluidas.has(categoria.id));
+    const categoriasNegadasAtivas = categoriasBusca.filter((categoria) => categoriasNegadas.has(categoria.id));
+    const opcoesBusca = JSON.stringify({ ordenacaoBusca, categorias: assinaturaCategorias });
+    const assinaturaBusca = {
+      query,
+      filter: activeFilter,
+      source: assinaturaFontesBusca,
+      opcoes: opcoesBusca,
+    };
     lastSearch.current = assinaturaBusca;
+    const geracaoBusca = acumular ? geracaoBuscaRef.current : ++geracaoBuscaRef.current;
+
+    if (!acumular) {
+      proximosOffsetsBuscaRef.current = { modrinth: 0, curseforge: 0 };
+      temMaisPorFonteBuscaRef.current = {
+        modrinth: fontesAtivas.includes("modrinth"),
+        curseforge: fontesAtivas.includes("curseforge"),
+      };
+    }
+
+    const fontesConsultadas = fontesAtivas.filter((fonte) => temMaisPorFonteBuscaRef.current[fonte]);
+    if (fontesConsultadas.length === 0) {
+      setTemMaisResultados(false);
+      return;
+    }
+
     if (acumular) {
       carregandoMaisResultadosRef.current = true;
       setCarregandoMaisResultados(true);
@@ -981,61 +1283,109 @@ export default function InstanceManager({
       setTemMaisResultados(true);
     }
     try {
-      const typeMap: Record<ContentFilter, string> = {
+      const typeMap: Record<ContentFilter, TipoProjetoCache> = {
         mods: "mod",
         resourcepacks: "resourcepack",
         shaders: "shader",
       };
-      const plataforma = browseSource === "curseforge" ? "curseforge" : "modrinth";
       const tipoConteudo = typeMap[activeFilter];
       const loaderInstancia = instanceDetails.loaderType?.trim().toLowerCase();
+      const limiteConsulta = fontesConsultadas.length > 1
+        ? LIMITE_CORRESPONDENCIA_FONTES
+        : LIMITE_RESULTADOS_BUSCA;
+      const respostas = await Promise.allSettled(
+        fontesConsultadas.map(async (fonte) => {
+          const resultados = await invoke<ResultadoBuscaOnline[]>("search_mods_online", {
+            query,
+            platform: fonte,
+            contentType: tipoConteudo,
+            filtros: {
+              gameVersion: instanceDetails.version,
+              loader: tipoConteudo === "mod" && loaderInstancia ? loaderInstancia : null,
+              categoriasModrinth: fonteCategoria === "modrinth"
+                ? categoriasIncluidasAtivas.flatMap((categoria) => categoria.modrinth ? [categoria.modrinth] : [])
+                : [],
+              categoriasCurseforge: fonteCategoria === "curseforge"
+                ? categoriasIncluidasAtivas.flatMap((categoria) => categoria.curseforge ? [categoria.curseforge] : [])
+                : [],
+              categoriasNegadasModrinth: fonteCategoria === "modrinth"
+                ? categoriasNegadasAtivas.flatMap((categoria) => categoria.modrinth ? [categoria.modrinth] : [])
+                : [],
+              categoriasNegadasCurseforge: fonteCategoria === "curseforge"
+                ? categoriasNegadasAtivas.flatMap((categoria) => categoria.curseforge ? [categoria.curseforge] : [])
+                : [],
+              sort: ordenacaoBusca,
+              offset: proximosOffsetsBuscaRef.current[fonte],
+              limit: limiteConsulta,
+            },
+          });
+          return { fonte, resultados };
+        })
+      );
 
-      const resultados: any[] = await invoke("search_mods_online", {
-        query,
-        platform: plataforma,
-        contentType: tipoConteudo,
-        filtros: {
-          gameVersion: instanceDetails.version,
-          loader: tipoConteudo === "mod" && loaderInstancia ? loaderInstancia : null,
-          offset: acumular ? searchResults.length : 0,
-          limit: 20,
-        },
-      });
-
-      const pagina = resultados.map((item: any) => ({
-          id: String(item.id || ""),
-          title: String(item.name || item.title || "Sem nome"),
-          description: String(item.description || ""),
-          icon_url: item.iconUrl || item.icon_url || undefined,
-          author: String(item.author || "Desconhecido"),
-          downloads:
-            typeof item.downloadCount === "number"
-              ? item.downloadCount
-              : typeof item.download_count === "number"
-                ? item.download_count
-                : undefined,
-          slug:
-            String(item.slug || "").trim() ||
-            String(item.id || "").trim(),
-          project_type: String(item.projectType || item.project_type || tipoConteudo),
-          latest_version: item.latestVersion || item.latest_version || undefined,
-          file_name: item.fileName || item.file_name || undefined,
-        }));
       if (lastSearch.current.query !== assinaturaBusca.query
           || lastSearch.current.filter !== assinaturaBusca.filter
-          || lastSearch.current.source !== assinaturaBusca.source) {
+          || lastSearch.current.source !== assinaturaBusca.source
+          || lastSearch.current.opcoes !== assinaturaBusca.opcoes) {
         return;
       }
-      setTemMaisResultados(resultados.length === 20);
+
+      const sucessos = respostas.flatMap((resposta) => resposta.status === "fulfilled" ? [resposta.value] : []);
+      if (sucessos.length === 0) {
+        const motivos = respostas.flatMap((resposta) =>
+          resposta.status === "rejected" ? [String(resposta.reason)] : []
+        );
+        throw new Error(motivos.join(" | ") || "Não foi possível consultar os catálogos.");
+      }
+
+      respostas.forEach((resposta, indice) => {
+        if (resposta.status === "rejected") {
+          temMaisPorFonteBuscaRef.current[fontesConsultadas[indice]] = false;
+        }
+      });
+      const paginas = sucessos.map(({ fonte, resultados }) => ({
+        fonte,
+        resultados: resultados.slice(0, LIMITE_RESULTADOS_BUSCA),
+      }));
+      paginas.forEach(({ fonte, resultados }) => {
+        proximosOffsetsBuscaRef.current[fonte] += resultados.length;
+        temMaisPorFonteBuscaRef.current[fonte] = resultados.length === LIMITE_RESULTADOS_BUSCA;
+      });
+
+      const maiorPagina = Math.max(...paginas.map(({ resultados }) => resultados.length));
+      const resultadosPrincipais = Array.from({ length: maiorPagina })
+        .flatMap((_, indice) => paginas.flatMap(({ resultados }) => resultados[indice] ? [resultados[indice]] : []))
+        .filter((item) => !item.ocultoPorCategoria)
+        .map((item) => mapearResultadoBuscaOnline(item, tipoConteudo));
+      const chavesPrincipaisPorFonte: Record<BrowseSource, Set<string>> = {
+        modrinth: new Set(),
+        curseforge: new Set(),
+      };
+      resultadosPrincipais.forEach((item) => {
+        obterChavesCorrespondenciaBusca(item).forEach((chave) => chavesPrincipaisPorFonte[item.source].add(chave));
+      });
+      const resultadosComplementares = sucessos.flatMap(({ fonte, resultados }) => {
+        const outraFonte: BrowseSource = fonte === "modrinth" ? "curseforge" : "modrinth";
+        return resultados
+          .slice(LIMITE_RESULTADOS_BUSCA)
+          .filter((item) => !item.ocultoPorCategoria)
+          .map((item) => mapearResultadoBuscaOnline(item, tipoConteudo))
+          .filter((item) => obterChavesCorrespondenciaBusca(item)
+            .some((chave) => chavesPrincipaisPorFonte[outraFonte].has(chave)));
+      });
+      const novosResultados = [...resultadosPrincipais, ...resultadosComplementares];
+
+      setTemMaisResultados(fontesAtivas.some((fonte) => temMaisPorFonteBuscaRef.current[fonte]));
       setSearchResults((atuais) => {
-        if (!acumular) return pagina;
-        const idsExistentes = new Set(atuais.map((item) => item.id));
-        return [...atuais, ...pagina.filter((item) => !idsExistentes.has(item.id))];
+        if (!acumular) return mesclarResultadosBusca(novosResultados, ordenacaoBusca);
+        const resultadosExistentes = atuais.flatMap(extrairVariantesResultadoBusca);
+        return mesclarResultadosBusca([...resultadosExistentes, ...novosResultados], ordenacaoBusca);
       });
     } catch (error) {
       console.error("Erro ao buscar:", error);
-      if (!acumular) setSearchResults([]);
+      if (!acumular && geracaoBuscaRef.current === geracaoBusca) setSearchResults([]);
     } finally {
+      if (geracaoBuscaRef.current !== geracaoBusca) return;
       if (acumular) {
         carregandoMaisResultadosRef.current = false;
         setCarregandoMaisResultados(false);
@@ -1045,19 +1395,11 @@ export default function InstanceManager({
     }
   };
 
-  const installContent = async (item: SearchResult) => {
+  const instalarConteudoSelecionado = async (item: SearchResult) => {
     if (!instanceDetails) return;
-    setInstalling(item.id);
+    const tipoProjeto = item.project_type;
 
-    try {
-      const typeMap: Record<ContentFilter, string> = {
-        mods: "mod",
-        resourcepacks: "resourcepack",
-        shaders: "shader",
-      };
-      const tipoProjeto = typeMap[activeFilter];
-
-      if (browseSource === "curseforge") {
+    if (item.source === "curseforge") {
         if (tipoProjeto === "mod") {
           await invoke("install_mod", {
             instanceId,
@@ -1095,91 +1437,155 @@ export default function InstanceManager({
           updateAvailable: false,
         });
         salvarCacheConteudoInstalado(cacheConteudo);
-
-        await loadInstalledContent(activeFilter);
         return;
-      }
+    }
 
-      // Determinar o loader correto para filtrar versões
-      const loaderType = instanceDetails.loaderType?.toLowerCase() || "";
-      const loadersSuportados = ["fabric", "forge", "quilt", "neoforge"];
-      const params = new URLSearchParams();
-      params.set("game_versions", JSON.stringify([instanceDetails.version]));
-      if (activeFilter === "mods" && loadersSuportados.includes(loaderType)) {
-        params.set("loaders", JSON.stringify([loaderType]));
-      }
-      
-      // Buscar versões compatíveis com versão do MC E loader
-      const versionsRes = await fetch(
-        `https://api.modrinth.com/v2/project/${item.id}/version?${params.toString()}`
-      );
-      const versions = await versionsRes.json();
+    const loaderType = instanceDetails.loaderType?.toLowerCase() || "";
+    const loadersSuportados = ["fabric", "forge", "quilt", "neoforge"];
+    const params = new URLSearchParams();
+    params.set("game_versions", JSON.stringify([instanceDetails.version]));
+    if (tipoProjeto === "mod" && loadersSuportados.includes(loaderType)) {
+      params.set("loaders", JSON.stringify([loaderType]));
+    }
 
-      if (versions.length === 0) {
-        const alvoCompat = loaderType ? `${loaderType} ${instanceDetails.version}` : instanceDetails.version;
-        alert(`Nenhuma versão compatível com ${alvoCompat}`);
-        setInstalling(null);
-        return;
-      }
+    const versionsRes = await fetch(
+      `https://api.modrinth.com/v2/project/${item.id}/version?${params.toString()}`
+    );
+    if (!versionsRes.ok) {
+      throw new Error(`Modrinth retornou HTTP ${versionsRes.status} para ${item.title}.`);
+    }
+    const versions = await versionsRes.json();
 
-      const version = versions[0];
-      const file = version.files.find((f: any) => f.primary) || version.files[0];
+    if (versions.length === 0) {
+      const alvoCompat = loaderType ? `${loaderType} ${instanceDetails.version}` : instanceDetails.version;
+      throw new Error(`Nenhuma versão de ${item.title} é compatível com ${alvoCompat}.`);
+    }
 
-      if (!file) {
-        alert("Arquivo não encontrado");
-        setInstalling(null);
-        return;
-      }
+    const version = versions[0];
+    const file = version.files.find((arquivo: { primary?: boolean }) => arquivo.primary) || version.files[0];
 
-      if (tipoProjeto === "mod") {
-        await invoke("install_mod", {
-          instanceId,
-          modInfo: {
-            id: item.id,
-            name: item.title,
-            description: item.description,
-            author: item.author,
-            version: version.version_number,
-            download_url: file.url,
-            file_name: file.filename,
-            platform: "modrinth",
-            dependencies: [],
-            version_id: version.id,
-          },
-        });
-      } else {
-        await invoke("install_project_file", {
-          instanceId,
-          projectType: tipoProjeto,
-          downloadUrl: file.url,
-          fileName: file.filename,
-        });
-      }
+    if (!file) throw new Error(`Arquivo compatível de ${item.title} não encontrado.`);
 
-      const cacheConteudo = lerCacheConteudoInstalado();
-      const tipoProjetoCache = tipoProjeto as TipoProjetoCache;
-      const nomeArquivoCache = file.filename || item.file_name || item.slug || item.id;
-      definirRegistroCacheConteudo(cacheConteudo, instanceId, tipoProjetoCache, nomeArquivoCache, {
-        name: item.title,
-        author: item.author,
-        icon: item.icon_url,
-        projectId: item.id,
-        source: "modrinth",
-        projectType: tipoProjetoCache,
-        latestVersion: version.version_number,
-        updateAvailable: false,
-        updateFileName: undefined,
-        updateDownloadUrl: undefined,
-        atualizacaoVerificadaEm: Date.now(),
+    if (tipoProjeto === "mod") {
+      await invoke("install_mod", {
+        instanceId,
+        modInfo: {
+          id: item.id,
+          name: item.title,
+          description: item.description,
+          author: item.author,
+          version: version.version_number,
+          download_url: file.url,
+          file_name: file.filename,
+          platform: "modrinth",
+          dependencies: [],
+          version_id: version.id,
+        },
       });
-      salvarCacheConteudoInstalado(cacheConteudo);
+    } else {
+      await invoke("install_project_file", {
+        instanceId,
+        projectType: tipoProjeto,
+        downloadUrl: file.url,
+        fileName: file.filename,
+      });
+    }
 
-      await loadInstalledContent(activeFilter);
+    const cacheConteudo = lerCacheConteudoInstalado();
+    const nomeArquivoCache = file.filename || item.file_name || item.slug || item.id;
+    definirRegistroCacheConteudo(cacheConteudo, instanceId, tipoProjeto, nomeArquivoCache, {
+      name: item.title,
+      author: item.author,
+      icon: item.icon_url,
+      projectId: item.id,
+      source: "modrinth",
+      projectType: tipoProjeto,
+      latestVersion: version.version_number,
+      updateAvailable: false,
+      updateFileName: undefined,
+      updateDownloadUrl: undefined,
+      atualizacaoVerificadaEm: Date.now(),
+    });
+    salvarCacheConteudoInstalado(cacheConteudo);
+  };
+
+  const alternarItemFilaInstalacao = (item: SearchResult) => {
+    const chave = chaveSelecaoDownload(item);
+    setFilaInstalacao((atual) => {
+      if (atual[chave]) {
+        const proxima = { ...atual };
+        delete proxima[chave];
+        return proxima;
+      }
+      return { ...atual, [chave]: item };
+    });
+  };
+
+  const revisarFilaInstalacao = async () => {
+    const itens = Object.values(filaInstalacao);
+    if (itens.length === 0) return;
+
+    setRevisaoInstalacaoAberta(true);
+    setCarregandoPlanoInstalacao(true);
+    setErroPlanoInstalacao(null);
+    setPlanoInstalacao([]);
+    try {
+      const plano = await invoke<ItemPlanoInstalacaoConteudo[]>("planejar_instalacao_conteudo", {
+        instanceId,
+        itens: itens.map((item) => ({
+          id: item.id,
+          nome: item.title,
+          plataforma: item.source,
+          tipoProjeto: item.project_type,
+        })),
+      });
+      setPlanoInstalacao(plano);
     } catch (error) {
-      console.error("Erro ao instalar:", error);
-      alert(`Erro: ${error}`);
+      console.error("Erro ao planejar instalação:", error);
+      setErroPlanoInstalacao(String(error));
     } finally {
-      setInstalling(null);
+      setCarregandoPlanoInstalacao(false);
+    }
+  };
+
+  const instalarFilaSelecionada = async () => {
+    const itens = Object.values(filaInstalacao);
+    if (itens.length === 0 || instalandoFila) return;
+
+    setInstalandoFila(true);
+    setErroPlanoInstalacao(null);
+    const tiposAlterados = new Set<ContentFilter>();
+    try {
+      for (let indice = 0; indice < itens.length; indice += 1) {
+        const item = itens[indice];
+        setProgressoInstalacao({ atual: indice + 1, total: itens.length, nome: item.title });
+        await instalarConteudoSelecionado(item);
+        tiposAlterados.add(
+          item.project_type === "resourcepack"
+            ? "resourcepacks"
+            : item.project_type === "shader"
+              ? "shaders"
+              : "mods"
+        );
+        const chave = chaveSelecaoDownload(item);
+        setFilaInstalacao((atual) => {
+          const proxima = { ...atual };
+          delete proxima[chave];
+          return proxima;
+        });
+      }
+
+      for (const tipo of tiposAlterados) {
+        await loadInstalledContent(tipo, true);
+      }
+      setRevisaoInstalacaoAberta(false);
+      setPlanoInstalacao([]);
+    } catch (error) {
+      console.error("Erro ao instalar fila:", error);
+      setErroPlanoInstalacao(`A instalação foi interrompida: ${String(error)}`);
+    } finally {
+      setInstalandoFila(false);
+      setProgressoInstalacao(null);
     }
   };
 
@@ -1639,8 +2045,8 @@ export default function InstanceManager({
       icon_url: item.icon_url || "",
       author: item.author,
       slug: item.slug,
-      source: browseSource,
-      project_type: tipoProjetoPorFiltro(activeFilter),
+      source: item.source,
+      project_type: item.project_type,
       downloads: item.downloads,
     });
   };
@@ -1740,6 +2146,61 @@ export default function InstanceManager({
     filteredContent.every((item) => arquivosSelecionados.has(item.fileName));
   const quantidadeAtualizaveis = filteredContent.filter((item) => item.updateAvailable).length;
   const mostrarControlesAtualizacao = quantidadeAtualizaveis > 0 || updatingAll;
+  const itensFilaInstalacao = Object.values(filaInstalacao);
+  const fontesBuscaMarcadas = FONTES_BUSCA.filter((fonte) => fontesBuscaSelecionadas[fonte]);
+  const fonteCategorias = fontesBuscaMarcadas.length === 1 ? fontesBuscaMarcadas[0] : null;
+  const categoriasDaFonte = fonteCategorias
+    ? categoriasBusca.filter((categoria) => Boolean(categoria[fonteCategorias]))
+    : [];
+  const quantidadeFiltrosBusca = categoriasIncluidas.size
+    + categoriasNegadas.size
+    + fontesBuscaMarcadas.length
+    + Number(ordenacaoBusca !== "relevancia");
+  const resumoFontesBusca = (() => {
+    if (fontesBuscaMarcadas.length === 0) return "Todas as fontes";
+    if (fontesBuscaMarcadas.length === 2) return "Modrinth e CurseForge";
+    return fontesBuscaMarcadas[0] === "modrinth" ? "Modrinth" : "CurseForge";
+  })();
+  const resumoCategorias = (() => {
+    if (categoriasIncluidas.size === 0 && categoriasNegadas.size === 0) return "Todas as categorias";
+    if (categoriasNegadas.size === 0) return `${categoriasIncluidas.size} incluídas`;
+    if (categoriasIncluidas.size === 0) return `${categoriasNegadas.size} negadas`;
+    return `${categoriasIncluidas.size} incluídas • ${categoriasNegadas.size} negadas`;
+  })();
+
+  const alternarCategoriaBusca = (categoriaId: string, acao: "incluir" | "negar") => {
+    const categoriasAlvo = acao === "incluir" ? categoriasIncluidas : categoriasNegadas;
+    if (!categoriasAlvo.has(categoriaId) && categoriasAlvo.size >= LIMITE_CATEGORIAS_BUSCA) return;
+
+    const atualizarAlvo = acao === "incluir" ? setCategoriasIncluidas : setCategoriasNegadas;
+    const atualizarOpostas = acao === "incluir" ? setCategoriasNegadas : setCategoriasIncluidas;
+    atualizarAlvo((categoriasAtuais) => {
+      const proximas = new Set(categoriasAtuais);
+      if (proximas.has(categoriaId)) {
+        proximas.delete(categoriaId);
+      } else {
+        proximas.add(categoriaId);
+      }
+      return proximas;
+    });
+    if (!categoriasAlvo.has(categoriaId)) {
+      atualizarOpostas((categoriasAtuais) => {
+        const proximas = new Set(categoriasAtuais);
+        proximas.delete(categoriaId);
+        return proximas;
+      });
+    }
+  };
+
+  const alternarFonteBusca = (fonte: BrowseSource) => {
+    setFontesBuscaSelecionadas((fontesAtuais) => ({
+      ...fontesAtuais,
+      [fonte]: !fontesAtuais[fonte],
+    }));
+    setCategoriasIncluidas(new Set());
+    setCategoriasNegadas(new Set());
+    setSeletorCategoriasAberto(false);
+  };
 
   const sincronizarIndicadorRolagem = useCallback(() => {
     const lista = listaConteudoRef.current;
@@ -1865,12 +2326,12 @@ export default function InstanceManager({
   );
 
   const projetoJaInstalado = (item: SearchResult) => {
-    const idProjeto = item.id.toLowerCase();
-    if (idsProjetosInstalados.has(idProjeto)) return true;
+    const variantes = extrairVariantesResultadoBusca(item);
+    if (variantes.some((variante) => idsProjetosInstalados.has(variante.id.toLowerCase()))) return true;
 
-    return currentContent.some((instalado) =>
-      arquivoPodePertencerAoProjeto(instalado.fileName, item.slug)
-    );
+    return currentContent.some((instalado) => variantes.some((variante) =>
+      arquivoPodePertencerAoProjeto(instalado.fileName, variante.slug)
+    ));
   };
 
   // Filtros disponíveis baseado no tipo de instância
@@ -2055,8 +2516,8 @@ export default function InstanceManager({
         <div className="flex gap-1">
           {(
             isVanilla
-              ? (["content", "worlds", "logs"] as ContentTab[])
-              : (["content", "worlds", "configuration", "logs"] as ContentTab[])
+              ? (["content", "worlds", "servers", "logs"] as ContentTab[])
+              : (["content", "worlds", "servers", "configuration", "logs"] as ContentTab[])
           ).map((tab) => (
             <button
               key={tab}
@@ -2072,6 +2533,8 @@ export default function InstanceManager({
                 ? "Conteúdo"
                 : tab === "worlds"
                   ? "Mundos"
+                  : tab === "servers"
+                    ? "Servidores"
                   : tab === "configuration"
                     ? "Configuração"
                     : "Logs"}
@@ -2104,7 +2567,9 @@ export default function InstanceManager({
                   placeholder={
                     viewMode === "installed"
                       ? `Buscar em ${filteredContent.length} projetos...`
-                      : `Buscar no ${browseSource === "modrinth" ? "Modrinth" : "CurseForge"}...`
+                      : fontesBuscaMarcadas.length === 1
+                        ? `Buscar no ${fontesBuscaMarcadas[0] === "modrinth" ? "Modrinth" : "CurseForge"}...`
+                        : "Buscar no Modrinth e CurseForge..."
                   }
                   className="w-full bg-white/5 border border-white/10 rounded-lg py-2 pl-10 pr-10 text-sm focus:outline-none focus:ring-1 focus:ring-emerald-500/50"
                 />
@@ -2142,28 +2607,7 @@ export default function InstanceManager({
                     Adicionar conteúdo
                   </button>
                 </div>
-              ) : (
-                <div className="flex bg-white/5 p-1 rounded-lg border border-white/10">
-                  <button
-                    onClick={() => setBrowseSource("modrinth")}
-                    className={cn(
-                      "px-3 py-1.5 rounded text-xs font-bold transition-all",
-                      browseSource === "modrinth" ? "bg-emerald-500 text-black" : "text-white/40"
-                    )}
-                  >
-                    Modrinth
-                  </button>
-                  <button
-                    onClick={() => setBrowseSource("curseforge")}
-                    className={cn(
-                      "px-3 py-1.5 rounded text-xs font-bold transition-all",
-                      browseSource === "curseforge" ? "bg-[#f16436] text-white" : "text-white/40"
-                    )}
-                  >
-                    CurseForge
-                  </button>
-                </div>
-              )}
+              ) : null}
             </div>
 
             {/* Filters */}
@@ -2196,6 +2640,38 @@ export default function InstanceManager({
               </div>
 
               <div className="flex items-center gap-2">
+                {viewMode === "browse" && (
+                  <button
+                    type="button"
+                    onClick={() => setFiltrosBuscaAbertos((abertos) => {
+                      if (abertos) {
+                        setSeletorFontesAberto(false);
+                        setSeletorCategoriasAberto(false);
+                      }
+                      return !abertos;
+                    })}
+                    aria-expanded={filtrosBuscaAbertos}
+                    className={cn(
+                      "flex items-center gap-2 rounded-lg border px-3 py-1.5 text-xs font-bold transition-colors",
+                      filtrosBuscaAbertos || quantidadeFiltrosBusca > 0
+                        ? "border-emerald-400/30 bg-emerald-400/10 text-emerald-300"
+                        : "border-white/10 bg-white/5 text-white/45 hover:text-white"
+                    )}
+                  >
+                    <Filter size={13} />
+                    Filtros
+                    {quantidadeFiltrosBusca > 0 && (
+                      <span className="rounded bg-emerald-400 px-1.5 py-0.5 text-[9px] text-black">
+                        {quantidadeFiltrosBusca}
+                      </span>
+                    )}
+                    <ChevronDown
+                      size={12}
+                      className={cn("transition-transform", filtrosBuscaAbertos && "rotate-180")}
+                    />
+                  </button>
+                )}
+
                 {viewMode === "installed" && mostrarControlesAtualizacao && (
                   <button
                     onClick={atualizarTodosConteudos}
@@ -2246,13 +2722,305 @@ export default function InstanceManager({
               </div>
             </div>
 
+            {viewMode === "browse" && filtrosBuscaAbertos && (
+              <div className={cn(
+                "grid shrink-0 gap-3 border-b border-white/5 bg-white/[0.018] px-6 py-3",
+                "md:grid-cols-2 xl:grid-cols-4"
+              )}>
+                <div className="order-4 min-w-0">
+                  <span className="mb-1.5 block text-[9px] font-black uppercase tracking-[0.14em] text-white/30">
+                    Fonte
+                  </span>
+                  <div ref={seletorFontesRef} className="relative">
+                    <button
+                      type="button"
+                      aria-haspopup="listbox"
+                      aria-expanded={seletorFontesAberto}
+                      onClick={() => setSeletorFontesAberto((aberto) => !aberto)}
+                      className={cn(
+                        "flex w-full items-center justify-between gap-2 rounded-lg border border-white/10",
+                        "bg-[#171719] px-3 py-2 text-left text-xs font-bold text-white outline-none",
+                        "focus:border-emerald-400/40"
+                      )}
+                    >
+                      <span className="truncate">{resumoFontesBusca}</span>
+                      <ChevronDown
+                        size={12}
+                        className={cn(
+                          "shrink-0 text-white/35 transition-transform",
+                          seletorFontesAberto && "rotate-180"
+                        )}
+                      />
+                    </button>
+
+                    {seletorFontesAberto && (
+                      <div
+                        role="listbox"
+                        aria-label="Fontes do conteúdo"
+                        aria-multiselectable="true"
+                        className={cn(
+                          "absolute left-0 right-0 top-full z-30 mt-1 rounded-xl border border-white/10",
+                          "bg-[#171719] p-1 shadow-2xl"
+                        )}
+                      >
+                        {fontesBuscaMarcadas.length > 0 && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setFontesBuscaSelecionadas({ ...FONTES_BUSCA_INICIAIS });
+                              setCategoriasIncluidas(new Set());
+                              setCategoriasNegadas(new Set());
+                              setSeletorCategoriasAberto(false);
+                            }}
+                            className={cn(
+                              "w-full rounded-lg px-3 py-2 text-left text-xs font-bold text-white/45",
+                              "hover:bg-white/5 hover:text-white/70"
+                            )}
+                          >
+                            Todas as fontes
+                          </button>
+                        )}
+                        {FONTES_BUSCA.map((fonte) => {
+                          const ativa = fontesBuscaSelecionadas[fonte];
+                          const nomeFonte = fonte === "modrinth" ? "Modrinth" : "CurseForge";
+
+                          return (
+                            <button
+                              key={fonte}
+                              type="button"
+                              role="option"
+                              aria-selected={ativa}
+                              onClick={() => alternarFonteBusca(fonte)}
+                              className={cn(
+                                "flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-xs font-bold",
+                                "transition-colors hover:bg-white/5",
+                                ativa && fonte === "modrinth" && "bg-emerald-400/10 text-emerald-300",
+                                ativa && fonte === "curseforge" && "bg-orange-400/10 text-orange-300",
+                                !ativa && "text-white/60"
+                              )}
+                            >
+                              <span
+                                aria-hidden="true"
+                                className={cn(
+                                  "flex h-4 w-4 shrink-0 items-center justify-center rounded border",
+                                  ativa ? "border-current bg-current/10" : "border-white/20 bg-black/20"
+                                )}
+                              >
+                                {ativa && <Check size={11} strokeWidth={3} />}
+                              </span>
+                              <span className="truncate">{nomeFonte}</span>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                <label className="order-1 min-w-0">
+                  <span className="mb-1.5 block text-[9px] font-black uppercase tracking-[0.14em] text-white/30">
+                    Ordenar por
+                  </span>
+                  <span className="relative block">
+                    <select
+                      value={ordenacaoBusca}
+                      onChange={(evento) => setOrdenacaoBusca(evento.target.value as OrdenacaoBusca)}
+                      className={cn(
+                        "w-full appearance-none rounded-lg border border-white/10 bg-[#171719]",
+                        "px-3 py-2 pr-8 text-xs font-bold text-white outline-none focus:border-emerald-400/40"
+                      )}
+                    >
+                      {ORDENACOES_BUSCA.map((ordenacao) => (
+                        <option key={ordenacao.id} value={ordenacao.id}>{ordenacao.nome}</option>
+                      ))}
+                    </select>
+                    <ChevronDown
+                      size={12}
+                      className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-white/35"
+                    />
+                  </span>
+                </label>
+
+                <div className="order-2 min-w-0">
+                  <span className="mb-1.5 block text-[9px] font-black uppercase tracking-[0.14em] text-white/30">
+                    Minecraft
+                  </span>
+                  <div
+                    aria-label={`Minecraft ${instanceDetails?.version || "não identificado"}`}
+                    className={cn(
+                      "flex min-h-8 items-center rounded-lg border border-white/10 bg-[#171719]",
+                      "px-3 py-2 text-xs font-bold text-white"
+                    )}
+                  >
+                    <span className="truncate">{instanceDetails?.version || "Não identificado"}</span>
+                  </div>
+                </div>
+
+                <div className="order-3 min-w-0">
+                  <span className="mb-1.5 block text-[9px] font-black uppercase tracking-[0.14em] text-white/30">
+                    Modloader
+                  </span>
+                  <div
+                    aria-label={`Modloader ${instanceDetails?.loaderType || "Vanilla"}`}
+                    className={cn(
+                      "flex min-h-8 items-center rounded-lg border border-white/10 bg-[#171719]",
+                      "px-3 py-2 text-xs font-bold text-white"
+                    )}
+                  >
+                    <span className="truncate">{instanceDetails?.loaderType || "Vanilla"}</span>
+                  </div>
+                </div>
+
+                <div className="order-5 min-w-0 md:col-span-2 xl:col-span-4">
+                  <span className="mb-1.5 block text-[9px] font-black uppercase tracking-[0.14em] text-white/30">
+                    Categorias
+                  </span>
+                  <div ref={seletorCategoriasRef} className="relative">
+                    <button
+                      type="button"
+                      aria-haspopup="listbox"
+                      aria-expanded={seletorCategoriasAberto}
+                      disabled={carregandoCategorias || categoriasDaFonte.length === 0}
+                      onClick={() => setSeletorCategoriasAberto((aberto) => !aberto)}
+                      className={cn(
+                        "flex w-full items-center justify-between gap-2 rounded-lg border border-white/10",
+                        "bg-[#171719] px-3 py-2 text-left text-xs font-bold text-white outline-none",
+                        "focus:border-emerald-400/40 disabled:cursor-not-allowed disabled:opacity-35"
+                      )}
+                    >
+                      <span className="truncate">
+                        {!fonteCategorias
+                          ? "Marque uma única fonte"
+                          : carregandoCategorias
+                            ? "Carregando categorias..."
+                            : resumoCategorias}
+                      </span>
+                      {carregandoCategorias ? (
+                        <Loader2 size={12} className="shrink-0 animate-spin text-white/35" />
+                      ) : (
+                        <ChevronDown
+                          size={12}
+                          className={cn(
+                            "shrink-0 text-white/35 transition-transform",
+                            seletorCategoriasAberto && "rotate-180"
+                          )}
+                        />
+                      )}
+                    </button>
+
+                    {seletorCategoriasAberto && (
+                      <div
+                        role="group"
+                        aria-label="Categorias incluídas e negadas"
+                        className={cn(
+                          "scrollbar-custom absolute left-0 right-0 top-full z-30 mt-1 max-h-64 overflow-y-auto",
+                          "rounded-xl border border-white/10 bg-[#171719] p-1 shadow-2xl"
+                        )}
+                      >
+                        {(categoriasIncluidas.size > 0 || categoriasNegadas.size > 0) && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setCategoriasIncluidas(new Set());
+                              setCategoriasNegadas(new Set());
+                            }}
+                            className={cn(
+                              "w-full rounded-lg px-3 py-2 text-left text-xs font-bold text-white/45",
+                              "hover:bg-white/5 hover:text-white/70"
+                            )}
+                          >
+                            Limpar categorias
+                          </button>
+                        )}
+                        <div
+                          aria-hidden="true"
+                          className="flex items-center justify-end gap-3 px-2 py-1 text-[9px] font-bold uppercase"
+                        >
+                          <span className="flex items-center gap-1 text-emerald-300">
+                            <Check size={10} strokeWidth={3} /> Incluir
+                          </span>
+                          <span className="flex items-center gap-1 text-red-300">
+                            <X size={10} strokeWidth={3} /> Negar
+                          </span>
+                        </div>
+                        {categoriasDaFonte.map((categoria) => {
+                          const incluida = categoriasIncluidas.has(categoria.id);
+                          const negada = categoriasNegadas.has(categoria.id);
+                          const limiteInclusoesAtingido = !incluida
+                            && categoriasIncluidas.size >= LIMITE_CATEGORIAS_BUSCA;
+                          const limiteNegacoesAtingido = !negada
+                            && categoriasNegadas.size >= LIMITE_CATEGORIAS_BUSCA;
+
+                          return (
+                            <div
+                              key={categoria.id}
+                              className={cn(
+                                "flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-xs font-bold",
+                                incluida && "bg-emerald-500/[0.08]",
+                                negada && "bg-red-500/[0.08]",
+                                !incluida && !negada && "hover:bg-white/5"
+                              )}
+                            >
+                              <span className={cn(
+                                "min-w-0 flex-1 truncate px-1",
+                                incluida ? "text-emerald-200" : negada ? "text-red-200" : "text-white/60"
+                              )}>
+                                {categoria.nome}
+                              </span>
+                              <button
+                                type="button"
+                                aria-label={`${incluida ? "Remover inclusão de" : "Incluir"} ${categoria.nome}`}
+                                aria-pressed={incluida}
+                                disabled={limiteInclusoesAtingido}
+                                title={limiteInclusoesAtingido ? "Limite de 10 inclusões atingido" : "Incluir"}
+                                onClick={() => alternarCategoriaBusca(categoria.id, "incluir")}
+                                className={cn(
+                                  "flex h-6 w-6 shrink-0 items-center justify-center rounded-md border transition-colors",
+                                  "disabled:cursor-not-allowed disabled:opacity-25",
+                                  incluida
+                                    ? "border-emerald-400/50 bg-emerald-400/15 text-emerald-300"
+                                    : "border-white/15 text-white/30 hover:border-emerald-400/35 hover:text-emerald-300"
+                                )}
+                              >
+                                <Check size={11} strokeWidth={3} />
+                              </button>
+                              <button
+                                type="button"
+                                aria-label={`${negada ? "Remover negação de" : "Negar"} ${categoria.nome}`}
+                                aria-pressed={negada}
+                                disabled={limiteNegacoesAtingido}
+                                title={limiteNegacoesAtingido ? "Limite de 10 negações atingido" : "Negar"}
+                                onClick={() => alternarCategoriaBusca(categoria.id, "negar")}
+                                className={cn(
+                                  "flex h-6 w-6 shrink-0 items-center justify-center rounded-md border transition-colors",
+                                  "disabled:cursor-not-allowed disabled:opacity-25",
+                                  negada
+                                    ? "border-red-400/50 bg-red-400/15 text-red-300"
+                                    : "border-white/15 text-white/30 hover:border-red-400/35 hover:text-red-300"
+                                )}
+                              >
+                                <X size={11} strokeWidth={3} />
+                              </button>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+            )}
+
             {/* List */}
             <div className="relative min-h-0 flex-1">
               <div
                 id="lista-conteudo-instancia"
                 ref={listaConteudoRef}
                 onScroll={aoRolarListaConteudo}
-                className="h-full overflow-y-auto scrollbar-hide"
+                className={cn(
+                  "h-full overflow-y-auto scrollbar-hide",
+                  viewMode === "browse" && itensFilaInstalacao.length > 0 && "pb-24"
+                )}
               >
               {viewMode === "installed" ? (
                 loading ? (
@@ -2426,7 +3194,7 @@ export default function InstanceManager({
                   <div className="p-4 grid grid-cols-1 gap-3">
                     {searchResults.map((item) => (
                       <div
-                        key={item.id}
+                        key={item.chave}
                         className="bg-white/3 hover:bg-white/5 border border-white/5 rounded-xl p-4 flex gap-4 transition-all group"
                       >
                         <img
@@ -2445,8 +3213,16 @@ export default function InstanceManager({
                               >
                                 {item.title}
                               </button>
-                              <p className="text-xs text-white/40">
-                                por {item.author} • via <span className={browseSource === "modrinth" ? "text-emerald-400" : "text-orange-400"}>{browseSource}</span>
+                              <p className="flex flex-wrap items-center gap-1 text-xs text-white/40">
+                                <span>por {item.author} • via</span>
+                                {item.fontes.map((fonte) => (
+                                  <span
+                                    key={fonte}
+                                    className={fonte === "modrinth" ? "text-emerald-400" : "text-orange-400"}
+                                  >
+                                    {fonte}
+                                  </span>
+                                ))}
                               </p>
                             </div>
 
@@ -2461,24 +3237,24 @@ export default function InstanceManager({
                                 </button>
                               ) : (
                                 <button
-                                  onClick={() => installContent(item)}
-                                  disabled={installing === item.id}
+                                  onClick={() => alternarItemFilaInstalacao(item)}
                                   className={cn(
-                                    "px-4 py-2 rounded-xl text-sm font-bold transition-all flex items-center gap-2 shrink-0",
-                                    installing === item.id
-                                      ? "bg-white/10 text-white/40"
-                                      : "bg-emerald-500 hover:bg-emerald-400 text-black active:scale-95"
+                                    "flex shrink-0 items-center gap-2 rounded-xl border px-4 py-2",
+                                    "text-sm font-bold transition-all active:scale-95",
+                                    filaInstalacao[chaveSelecaoDownload(item)]
+                                      ? "border-emerald-300/30 bg-emerald-400/15 text-emerald-200"
+                                      : "border-transparent bg-emerald-500 text-black hover:bg-emerald-400"
                                   )}
                                 >
-                                  {installing === item.id ? (
+                                  {filaInstalacao[chaveSelecaoDownload(item)] ? (
                                     <>
-                                      <Loader2 size={14} className="animate-spin" />
-                                      Instalando...
+                                      <Check size={14} />
+                                      Marcado
                                     </>
                                   ) : (
                                     <>
-                                      <Download size={14} />
-                                      Instalar
+                                      <Plus size={14} />
+                                      Marcar
                                     </>
                                   )}
                                 </button>
@@ -2514,6 +3290,41 @@ export default function InstanceManager({
                 )
               )}
               </div>
+
+              {viewMode === "browse" && itensFilaInstalacao.length > 0 && (
+                <div className={cn(
+                  "absolute inset-x-4 bottom-3 z-30 flex flex-wrap items-center gap-3 rounded-xl border",
+                  "border-emerald-400/20 bg-[#17191a]/95 px-4 py-3 shadow-2xl backdrop-blur-md"
+                )}>
+                  <div className="grid h-8 w-8 place-items-center rounded-lg bg-emerald-400/12 text-emerald-300">
+                    <Check size={15} />
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <p className="text-xs font-black text-white">
+                      {itensFilaInstalacao.length} conteúdo{itensFilaInstalacao.length === 1 ? "" : "s"} na fila
+                    </p>
+                    <p className="text-[10px] text-white/35">Dependências serão incluídas durante a revisão.</p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setFilaInstalacao({})}
+                    className="px-2 py-1.5 text-[10px] font-bold text-white/35 hover:text-white"
+                  >
+                    Limpar
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void revisarFilaInstalacao()}
+                    className={cn(
+                      "flex items-center gap-2 rounded-lg bg-emerald-400 px-3.5 py-2",
+                      "text-xs font-black text-black hover:bg-emerald-300"
+                    )}
+                  >
+                    Revisar e confirmar
+                    <ChevronDown size={12} className="-rotate-90" />
+                  </button>
+                </div>
+              )}
 
               {indicadorRolagem.visivel && (
                 <div
@@ -2607,6 +3418,8 @@ export default function InstanceManager({
             )}
           </div>
         )}
+
+        {activeTab === "servers" && <Servidores instanceId={instanceId} />}
 
         {activeTab === "configuration" && instanceDetails && (
           <Configuracao
@@ -2920,6 +3733,18 @@ export default function InstanceManager({
           setEditorIconeAberto(false);
         }}
         aoSalvar={salvarIconeDiretamente}
+      />
+      <RevisaoInstalacaoConteudo
+        aberto={revisaoInstalacaoAberta}
+        plano={planoInstalacao}
+        carregando={carregandoPlanoInstalacao}
+        instalando={instalandoFila}
+        erro={erroPlanoInstalacao}
+        progresso={progressoInstalacao}
+        onFechar={() => {
+          if (!instalandoFila) setRevisaoInstalacaoAberta(false);
+        }}
+        onConfirmar={() => void instalarFilaSelecionada()}
       />
     </div>
   );

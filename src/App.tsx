@@ -42,6 +42,7 @@ import {
   EVENTO_INSTANCIAS_PUBLICAS_SOCIAIS,
   type PublicacaoInstanciaSocial,
 } from "./lib/eventosTransferenciaSocial";
+import { solicitarNavegacaoInterna } from "./lib/navegacaoInterna";
 
 const carregarSkinManager = () =>
   import("./components/SkinManager").then((modulo) => ({ default: modulo.SkinManager }));
@@ -263,6 +264,8 @@ export default function App() {
   }, [activeTab, alterarAba]);
 
   const voltarNavegacao = useCallback(() => {
+    if (solicitarNavegacaoInterna(-1)) return;
+
     const destino = historicoNavegacao.anteriores[
       historicoNavegacao.anteriores.length - 1
     ];
@@ -276,6 +279,8 @@ export default function App() {
   }, [activeTab, alterarAba, historicoNavegacao.anteriores]);
 
   const avancarNavegacao = useCallback(() => {
+    if (solicitarNavegacaoInterna(1)) return;
+
     const [destino] = historicoNavegacao.proximas;
     if (!destino) return;
 
@@ -301,12 +306,12 @@ export default function App() {
     const navegarPeloTeclado = (evento: KeyboardEvent) => {
       if (!evento.altKey || evento.ctrlKey || evento.metaKey || evento.shiftKey) return;
 
-      if (evento.key === "ArrowLeft" && historicoNavegacao.anteriores.length > 0) {
+      if (evento.key === "ArrowLeft") {
         evento.preventDefault();
         voltarNavegacao();
       }
 
-      if (evento.key === "ArrowRight" && historicoNavegacao.proximas.length > 0) {
+      if (evento.key === "ArrowRight") {
         evento.preventDefault();
         avancarNavegacao();
       }
@@ -317,13 +322,13 @@ export default function App() {
   }, [avancarNavegacao, historicoNavegacao, voltarNavegacao]);
 
   useEffect(() => {
-  const navegarPeloMouse = (evento: MouseEvent) => {
-    if (evento.button === 3 && historicoNavegacao.anteriores.length > 0) {
-      evento.preventDefault();
+    const navegarPeloMouse = (evento: MouseEvent) => {
+      if (evento.button === 3) {
+        evento.preventDefault();
         voltarNavegacao();
       }
 
-      if (evento.button === 4 && historicoNavegacao.proximas.length > 0) {
+      if (evento.button === 4) {
         evento.preventDefault();
         avancarNavegacao();
       }
@@ -1074,7 +1079,7 @@ export default function App() {
           <button
             type="button"
             onClick={voltarNavegacao}
-            disabled={historicoNavegacao.anteriores.length === 0}
+            disabled={historicoNavegacao.anteriores.length === 0 && activeTab !== "instance-manager"}
             aria-label="Voltar"
             title="Voltar (Alt + ←)"
             className={cn(
