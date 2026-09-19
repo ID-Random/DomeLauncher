@@ -2812,9 +2812,9 @@ export default function InstanceManager({
             {viewMode === "browse" && filtrosBuscaAbertos && (
               <div className={cn(
                 "grid shrink-0 gap-3 border-b border-white/5 bg-white/[0.018] px-6 py-3",
-                "md:grid-cols-2 xl:grid-cols-4"
+                "md:grid-cols-2"
               )}>
-                <div className="order-4 min-w-0">
+                <div className="order-2 min-w-0">
                   <span className="mb-1.5 block text-[9px] font-black uppercase tracking-[0.14em] text-white/30">
                     Fonte
                   </span>
@@ -2850,23 +2850,6 @@ export default function InstanceManager({
                           "bg-[#171719] p-1 shadow-2xl"
                         )}
                       >
-                        {fontesBuscaMarcadas.length > 0 && (
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setFontesBuscaSelecionadas({ ...FONTES_BUSCA_INICIAIS });
-                              setCategoriasIncluidas(new Set());
-                              setCategoriasNegadas(new Set());
-                              setSeletorCategoriasAberto(false);
-                            }}
-                            className={cn(
-                              "w-full rounded-lg px-3 py-2 text-left text-xs font-bold text-white/45",
-                              "hover:bg-white/5 hover:text-white/70"
-                            )}
-                          >
-                            Todas as fontes
-                          </button>
-                        )}
                         {FONTES_BUSCA.map((fonte) => {
                           const ativa = fontesBuscaSelecionadas[fonte];
                           const nomeFonte = fonte === "modrinth" ? "Modrinth" : "CurseForge";
@@ -2928,37 +2911,7 @@ export default function InstanceManager({
                   </span>
                 </label>
 
-                <div className="order-2 min-w-0">
-                  <span className="mb-1.5 block text-[9px] font-black uppercase tracking-[0.14em] text-white/30">
-                    Minecraft
-                  </span>
-                  <div
-                    aria-label={`Minecraft ${instanceDetails?.version || "não identificado"}`}
-                    className={cn(
-                      "flex min-h-8 items-center rounded-lg border border-white/10 bg-[#171719]",
-                      "px-3 py-2 text-xs font-bold text-white"
-                    )}
-                  >
-                    <span className="truncate">{instanceDetails?.version || "Não identificado"}</span>
-                  </div>
-                </div>
-
-                <div className="order-3 min-w-0">
-                  <span className="mb-1.5 block text-[9px] font-black uppercase tracking-[0.14em] text-white/30">
-                    Modloader
-                  </span>
-                  <div
-                    aria-label={`Modloader ${instanceDetails?.loaderType || "Vanilla"}`}
-                    className={cn(
-                      "flex min-h-8 items-center rounded-lg border border-white/10 bg-[#171719]",
-                      "px-3 py-2 text-xs font-bold text-white"
-                    )}
-                  >
-                    <span className="truncate">{instanceDetails?.loaderType || "Vanilla"}</span>
-                  </div>
-                </div>
-
-                <div className="order-5 min-w-0 md:col-span-2 xl:col-span-4">
+                <div className="order-3 min-w-0 md:col-span-2">
                   <span className="mb-1.5 block text-[9px] font-black uppercase tracking-[0.14em] text-white/30">
                     Categorias
                   </span>
