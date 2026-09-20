@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import {
   Play,
   Search,
@@ -31,7 +31,10 @@ import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { cn } from "../lib/utils";
 import { ICONE_DOME_LAUNCHER } from "../lib/imagemProjeto";
-import { arquivoPodePertencerAoProjeto } from "../lib/conteudoInstalado";
+import {
+  arquivoPodePertencerAoProjeto,
+  expandirSelecaoComDependentes,
+} from "../lib/conteudoInstalado";
 import { EVENTO_NAVEGACAO_INTERNA, type DirecaoNavegacaoInterna } from "../lib/navegacaoInterna";
 import Configuracao from "../pages/instance/Configuracao";
 import Servidores from "../pages/instance/Servidores";
@@ -91,6 +94,8 @@ interface InstalledMod {
   updateFileName?: string;
   updateDownloadUrl?: string;
   updating?: boolean;
+  identificadores: string[];
+  dependencias: string[];
 }
 
 interface ArquivoVersaoConteudo {
@@ -142,6 +147,8 @@ interface ConteudoInstaladoDetalhado {
   author: string;
   icon?: string;
   enabled: boolean;
+  identificadores: string[];
+  dependencias: string[];
 }
 
 interface VarianteResultadoBusca {
@@ -587,7 +594,7 @@ export default function InstanceManager({
   const [showMoreMenu, setShowMoreMenu] = useState(false);
   const [updatingAll, setUpdatingAll] = useState(false);
   const [modoSelecaoLote, setModoSelecaoLote] = useState(false);
-  const [arquivosSelecionados, setArquivosSelecionados] = useState<Set<string>>(new Set());
+  const [arquivosMarcados, setArquivosMarcados] = useState<Set<string>>(new Set());
   const [processandoLote, setProcessandoLote] = useState(false);
   const [menuConteudo, setMenuConteudo] = useState<{
     item: InstalledMod;
@@ -723,7 +730,7 @@ export default function InstanceManager({
   }, [activeTab, instalandoFila, revisaoInstalacaoAberta, viewMode]);
 
   useEffect(() => {
-    setArquivosSelecionados(new Set());
+    setArquivosMarcados(new Set());
     setCategoriasIncluidas(new Set());
     setCategoriasNegadas(new Set());
     setSeletorCategoriasAberto(false);
@@ -831,6 +838,8 @@ export default function InstanceManager({
           updateFileName: atualizacaoCacheValida ? registro?.updateFileName : undefined,
           updateDownloadUrl: atualizacaoCacheValida ? registro?.updateDownloadUrl : undefined,
           enabled: detalhe.enabled,
+          identificadores: detalhe.identificadores || [],
+          dependencias: detalhe.dependencias || [],
         };
       });
       
@@ -1107,6 +1116,78 @@ export default function InstanceManager({
     } else {
       setInstalledShaders((prev) => atualizador(prev));
     }
+  };
+
+  const substituirItemNaLista = (
+    tipoProjeto: TipoProjetoCache,
+    nomeArquivoAnterior: string,
+    itemAtualizado: InstalledMod
+  ) => {
+    atualizarListaPorTipo(tipoProjeto, (lista) => {
+      const indice = lista.findIndex((item) => item.fileName === nomeArquivoAnterior);
+      if (indice < 0) return [...lista, itemAtualizado];
+
+      const proximaLista = [...lista];
+      proximaLista[indice] = itemAtualizado;
+      return proximaLista;
+    });
+    setArquivosMarcados((selecionados) => {
+      if (!selecionados.has(nomeArquivoAnterior)) return selecionados;
+
+      const proximos = new Set(selecionados);
+      proximos.delete(nomeArquivoAnterior);
+      proximos.add(itemAtualizado.fileName);
+      return proximos;
+    });
+  };
+
+  const atualizarSomenteItemInstalado = (
+    itemAnterior: InstalledMod,
+    tipoProjeto: TipoProjetoCache,
+    nomeArquivo: string,
+    versao: string,
+    atualizacaoConcluida: boolean
+  ) => {
+    const atualizacaoDisponivel = !atualizacaoConcluida && Boolean(
+      itemAnterior.latestVersion && itemAnterior.latestVersion !== versao
+    );
+    const itemAtualizado: InstalledMod = {
+      ...itemAnterior,
+      fileName: nomeArquivo,
+      version: versao,
+      enabled: true,
+      latestVersion: atualizacaoConcluida ? versao : itemAnterior.latestVersion,
+      updateAvailable: atualizacaoDisponivel,
+      updateFileName: atualizacaoConcluida ? undefined : itemAnterior.updateFileName,
+      updateDownloadUrl: atualizacaoConcluida ? undefined : itemAnterior.updateDownloadUrl,
+      updating: false,
+    };
+
+    substituirItemNaLista(tipoProjeto, itemAnterior.fileName, itemAtualizado);
+
+    const cacheConteudo = lerCacheConteudoInstalado();
+    const registroAnterior = obterRegistroCacheConteudo(
+      cacheConteudo,
+      instanceId,
+      tipoProjeto,
+      itemAnterior.fileName
+    );
+    removerRegistroCacheConteudo(cacheConteudo, instanceId, tipoProjeto, itemAnterior.fileName);
+    definirRegistroCacheConteudo(cacheConteudo, instanceId, tipoProjeto, nomeArquivo, {
+      name: itemAtualizado.name,
+      author: itemAtualizado.author,
+      icon: itemAtualizado.icon,
+      projectId: itemAtualizado.projectId,
+      source: itemAtualizado.source,
+      projectType: tipoProjeto,
+      latestVersion: itemAtualizado.latestVersion,
+      updateAvailable: itemAtualizado.updateAvailable,
+      updateFileName: itemAtualizado.updateFileName,
+      updateDownloadUrl: itemAtualizado.updateDownloadUrl,
+      atualizacaoVerificadaEm: atualizacaoConcluida ? Date.now() : undefined,
+      versaoIdentificacao: registroAnterior?.versaoIdentificacao,
+    });
+    salvarCacheConteudoInstalado(cacheConteudo);
   };
 
   const verificarAtualizacoesConteudo = async (
@@ -1605,6 +1686,7 @@ export default function InstanceManager({
         itens: itens.map((item) => ({
           id: item.id,
           nome: item.title,
+          iconeUrl: item.icon_url || null,
           plataforma: item.source,
           tipoProjeto: item.project_type,
         })),
@@ -1659,32 +1741,44 @@ export default function InstanceManager({
     }
   };
 
-  const toggleMod = async (mod: InstalledMod) => {
-    const tipoProjeto = tipoProjetoPorFiltro(activeFilter);
-    try {
-      const novoNomeArquivo = await invoke<string>("toggle_project_file_enabled", {
-        instanceId,
-        projectType: tipoProjeto,
-        fileName: mod.fileName,
-        enabled: !mod.enabled,
+  const definirEstadoItemInstalado = async (
+    mod: InstalledMod,
+    filtro: ContentFilter,
+    enabled: boolean
+  ) => {
+    const tipoProjeto = tipoProjetoPorFiltro(filtro);
+    const novoNomeArquivo = await invoke<string>("toggle_project_file_enabled", {
+      instanceId,
+      projectType: tipoProjeto,
+      fileName: mod.fileName,
+      enabled,
+    });
+
+    const cacheConteudo = lerCacheConteudoInstalado();
+    const registroAtual = obterRegistroCacheConteudo(
+      cacheConteudo,
+      instanceId,
+      tipoProjeto,
+      mod.fileName
+    );
+    if (registroAtual) {
+      removerRegistroCacheConteudo(cacheConteudo, instanceId, tipoProjeto, mod.fileName);
+      definirRegistroCacheConteudo(cacheConteudo, instanceId, tipoProjeto, novoNomeArquivo, {
+        ...registroAtual,
       });
+      salvarCacheConteudoInstalado(cacheConteudo);
+    }
 
-      const cacheConteudo = lerCacheConteudoInstalado();
-      const registroAtual = obterRegistroCacheConteudo(
-        cacheConteudo,
-        instanceId,
-        tipoProjeto,
-        mod.fileName
-      );
-      if (registroAtual) {
-        removerRegistroCacheConteudo(cacheConteudo, instanceId, tipoProjeto, mod.fileName);
-        definirRegistroCacheConteudo(cacheConteudo, instanceId, tipoProjeto, novoNomeArquivo, {
-          ...registroAtual,
-        });
-        salvarCacheConteudoInstalado(cacheConteudo);
-      }
+    substituirItemNaLista(tipoProjeto, mod.fileName, {
+      ...mod,
+      fileName: novoNomeArquivo,
+      enabled,
+    });
+  };
 
-      await loadInstalledContent(activeFilter);
+  const toggleMod = async (mod: InstalledMod) => {
+    try {
+      await definirEstadoItemInstalado(mod, activeFilter, !mod.enabled);
     } catch (error) {
       console.error("Erro ao alternar estado do arquivo:", error);
       alert(`Erro ao alterar estado: ${error}`);
@@ -1717,10 +1811,10 @@ export default function InstanceManager({
   };
 
   const alternarSelecaoArquivo = (fileName: string) => {
-    const selecionando = !arquivosSelecionados.has(fileName);
+    const selecionando = !arquivosMarcados.has(fileName);
     if (selecionando) setModoSelecaoLote(true);
 
-    setArquivosSelecionados((anterior) => {
+    setArquivosMarcados((anterior) => {
       const proximo = new Set(anterior);
       if (proximo.has(fileName)) {
         proximo.delete(fileName);
@@ -1736,7 +1830,7 @@ export default function InstanceManager({
     const todosSelecionados = nomesVisiveis.every((nome) => arquivosSelecionados.has(nome));
     if (!todosSelecionados) setModoSelecaoLote(true);
 
-    setArquivosSelecionados((anterior) => {
+    setArquivosMarcados((anterior) => {
       const proximo = new Set(anterior);
       if (todosSelecionados) {
         nomesVisiveis.forEach((nome) => proximo.delete(nome));
@@ -1752,7 +1846,6 @@ export default function InstanceManager({
     itensAlvo: InstalledMod[]
   ) => {
     if (itensAlvo.length === 0 || processandoLote) return;
-    const tipoProjeto = tipoProjetoPorFiltro(activeFilter);
     setProcessandoLote(true);
     try {
       for (const item of itensAlvo) {
@@ -1763,16 +1856,10 @@ export default function InstanceManager({
 
         const deveFicarAtivo = acao === "ativar";
         if (item.enabled === deveFicarAtivo) continue;
-        await invoke("toggle_project_file_enabled", {
-          instanceId,
-          projectType: tipoProjeto,
-          fileName: item.fileName,
-          enabled: deveFicarAtivo,
-        });
+        await definirEstadoItemInstalado(item, activeFilter, deveFicarAtivo);
       }
 
-      setArquivosSelecionados(new Set());
-      await loadInstalledContent(activeFilter);
+      setArquivosMarcados(new Set());
     } catch (error) {
       console.error("Erro ao executar ação em lote:", error);
       alert(`Erro ao processar itens selecionados: ${error}`);
@@ -1791,9 +1878,12 @@ export default function InstanceManager({
     );
 
     try {
+      let nomeArquivoAtualizado = item.updateFileName || item.fileName;
+      let versaoAtualizada = item.latestVersion || item.version;
+
       if (item.source === "curseforge") {
         if (tipoProjeto === "mod") {
-          await invoke("install_mod", {
+          nomeArquivoAtualizado = await invoke<string>("install_mod", {
             instanceId,
             modInfo: {
               id: item.projectId,
@@ -1808,7 +1898,7 @@ export default function InstanceManager({
             },
           });
         } else {
-          await invoke("install_curseforge_project_file", {
+          nomeArquivoAtualizado = await invoke<string>("install_curseforge_project_file", {
             instanceId,
             projectType: tipoProjeto,
             projectId: item.projectId,
@@ -1847,7 +1937,7 @@ export default function InstanceManager({
         }
 
         if (tipoProjeto === "mod") {
-          await invoke("install_mod", {
+          nomeArquivoAtualizado = await invoke<string>("install_mod", {
             instanceId,
             modInfo: {
               id: item.projectId,
@@ -1863,20 +1953,31 @@ export default function InstanceManager({
             },
           });
         } else {
-          await invoke("install_project_file", {
+          nomeArquivoAtualizado = await invoke<string>("install_project_file", {
             instanceId,
             projectType: tipoProjeto,
             downloadUrl,
             fileName,
           });
         }
+        versaoAtualizada = latestVersion || item.version;
       }
 
-      if (item.updateFileName && item.updateFileName !== item.fileName) {
-        await removerConteudoInstalado(item, filtro);
+      if (nomeArquivoAtualizado !== item.fileName) {
+        await invoke("remove_project_file", {
+          instanceId,
+          projectType: tipoProjeto,
+          fileName: item.fileName,
+        });
       }
 
-      await loadInstalledContent(filtro);
+      atualizarSomenteItemInstalado(
+        item,
+        tipoProjeto,
+        nomeArquivoAtualizado,
+        versaoAtualizada,
+        true
+      );
     } catch (error) {
       console.error("Erro ao atualizar conteúdo:", error);
       alert(`Erro ao atualizar "${item.name}": ${error}`);
@@ -1992,8 +2093,9 @@ export default function InstanceManager({
     setTrocandoVersaoConteudo(true);
     setErroTrocaVersao(null);
     try {
+      let nomeArquivoInstalado = arquivo.filename;
       if (tipoProjeto === "mod") {
-        await invoke("install_mod", {
+        nomeArquivoInstalado = await invoke<string>("install_mod", {
           instanceId,
           modInfo: {
             id: itemTrocaVersao.projectId,
@@ -2009,7 +2111,7 @@ export default function InstanceManager({
           },
         });
       } else {
-        await invoke("install_project_file", {
+        nomeArquivoInstalado = await invoke<string>("install_project_file", {
           instanceId,
           projectType: tipoProjeto,
           downloadUrl: arquivo.url,
@@ -2017,10 +2119,20 @@ export default function InstanceManager({
         });
       }
 
-      if (arquivo.filename !== itemTrocaVersao.fileName) {
-        await removerConteudoInstalado(itemTrocaVersao, filtroTrocaVersao);
+      if (nomeArquivoInstalado !== itemTrocaVersao.fileName) {
+        await invoke("remove_project_file", {
+          instanceId,
+          projectType: tipoProjeto,
+          fileName: itemTrocaVersao.fileName,
+        });
       }
-      await loadInstalledContent(filtroTrocaVersao);
+      atualizarSomenteItemInstalado(
+        itemTrocaVersao,
+        tipoProjeto,
+        nomeArquivoInstalado,
+        versao.version_number,
+        false
+      );
       setItemTrocaVersao(null);
     } catch (erro) {
       console.error("Erro ao trocar versão do conteúdo:", erro);
@@ -2202,6 +2314,12 @@ export default function InstanceManager({
     activeFilter === "mods" ? installedMods :
     activeFilter === "resourcepacks" ? installedResourcePacks :
     installedShaders;
+  const arquivosSelecionados = useMemo(
+    () => activeFilter === "mods"
+      ? expandirSelecaoComDependentes(arquivosMarcados, installedMods)
+      : new Set(arquivosMarcados),
+    [activeFilter, arquivosMarcados, installedMods]
+  );
 
   // Filtrar conteúdo instalado
   const filteredContent = currentContent.filter((item) =>
@@ -2237,6 +2355,15 @@ export default function InstanceManager({
     if (categoriasIncluidas.size === 0) return `${categoriasNegadas.size} negadas`;
     return `${categoriasIncluidas.size} incluídas • ${categoriasNegadas.size} negadas`;
   })();
+
+  const limparFiltrosBusca = () => {
+    setFontesBuscaSelecionadas({ ...FONTES_BUSCA_INICIAIS });
+    setSeletorFontesAberto(false);
+    setCategoriasIncluidas(new Set());
+    setCategoriasNegadas(new Set());
+    setSeletorCategoriasAberto(false);
+    setOrdenacaoBusca("relevancia");
+  };
 
   const alternarCategoriaBusca = (categoriaId: string, acao: "incluir" | "negar") => {
     const categoriasAlvo = acao === "incluir" ? categoriasIncluidas : categoriasNegadas;
@@ -2675,7 +2802,7 @@ export default function InstanceManager({
                   <button
                     onClick={() => {
                       setModoSelecaoLote((anterior) => !anterior);
-                      setArquivosSelecionados(new Set());
+                      setArquivosMarcados(new Set());
                     }}
                     className={cn(
                       "px-3 py-2 rounded-lg text-xs font-bold border transition-all",
@@ -2728,35 +2855,52 @@ export default function InstanceManager({
 
               <div className="flex items-center gap-2">
                 {viewMode === "browse" && (
-                  <button
-                    type="button"
-                    onClick={() => setFiltrosBuscaAbertos((abertos) => {
-                      if (abertos) {
-                        setSeletorFontesAberto(false);
-                        setSeletorCategoriasAberto(false);
-                      }
-                      return !abertos;
-                    })}
-                    aria-expanded={filtrosBuscaAbertos}
-                    className={cn(
-                      "flex items-center gap-2 rounded-lg border px-3 py-1.5 text-xs font-bold transition-colors",
-                      filtrosBuscaAbertos || quantidadeFiltrosBusca > 0
-                        ? "border-emerald-400/30 bg-emerald-400/10 text-emerald-300"
-                        : "border-white/10 bg-white/5 text-white/45 hover:text-white"
-                    )}
-                  >
-                    <Filter size={13} />
-                    Filtros
+                  <>
                     {quantidadeFiltrosBusca > 0 && (
-                      <span className="rounded bg-emerald-400 px-1.5 py-0.5 text-[9px] text-black">
-                        {quantidadeFiltrosBusca}
-                      </span>
+                      <button
+                        type="button"
+                        onClick={limparFiltrosBusca}
+                        aria-label="Limpar filtros"
+                        className={cn(
+                          "flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-bold",
+                          "text-white/40 transition-colors hover:bg-white/5 hover:text-white"
+                        )}
+                      >
+                        <X size={12} />
+                        Limpar
+                      </button>
                     )}
-                    <ChevronDown
-                      size={12}
-                      className={cn("transition-transform", filtrosBuscaAbertos && "rotate-180")}
-                    />
-                  </button>
+
+                    <button
+                      type="button"
+                      onClick={() => setFiltrosBuscaAbertos((abertos) => {
+                        if (abertos) {
+                          setSeletorFontesAberto(false);
+                          setSeletorCategoriasAberto(false);
+                        }
+                        return !abertos;
+                      })}
+                      aria-expanded={filtrosBuscaAbertos}
+                      className={cn(
+                        "flex items-center gap-2 rounded-lg border px-3 py-1.5 text-xs font-bold transition-colors",
+                        filtrosBuscaAbertos || quantidadeFiltrosBusca > 0
+                          ? "border-emerald-400/30 bg-emerald-400/10 text-emerald-300"
+                          : "border-white/10 bg-white/5 text-white/45 hover:text-white"
+                      )}
+                    >
+                      <Filter size={13} />
+                      Filtros
+                      {quantidadeFiltrosBusca > 0 && (
+                        <span className="rounded bg-emerald-400 px-1.5 py-0.5 text-[9px] text-black">
+                          {quantidadeFiltrosBusca}
+                        </span>
+                      )}
+                      <ChevronDown
+                        size={12}
+                        className={cn("transition-transform", filtrosBuscaAbertos && "rotate-180")}
+                      />
+                    </button>
+                  </>
                 )}
 
                 {viewMode === "installed" && mostrarControlesAtualizacao && (
@@ -2811,8 +2955,8 @@ export default function InstanceManager({
 
             {viewMode === "browse" && filtrosBuscaAbertos && (
               <div className={cn(
-                "grid shrink-0 gap-3 border-b border-white/5 bg-white/[0.018] px-6 py-3",
-                "md:grid-cols-2"
+                "grid shrink-0 grid-cols-[minmax(0,0.85fr)_minmax(0,1fr)_minmax(0,1.65fr)]",
+                "gap-2 border-b border-white/5 bg-white/[0.018] px-6 py-3"
               )}>
                 <div className="order-2 min-w-0">
                   <span className="mb-1.5 block text-[9px] font-black uppercase tracking-[0.14em] text-white/30">
@@ -2864,7 +3008,7 @@ export default function InstanceManager({
                               className={cn(
                                 "flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-xs font-bold",
                                 "transition-colors hover:bg-white/5",
-                                ativa && fonte === "modrinth" && "bg-emerald-400/10 text-emerald-300",
+                                ativa && fonte === "modrinth" && "bg-[#1bd96a]/10 text-[#1bd96a]",
                                 ativa && fonte === "curseforge" && "bg-orange-400/10 text-orange-300",
                                 !ativa && "text-white/60"
                               )}
@@ -2911,7 +3055,7 @@ export default function InstanceManager({
                   </span>
                 </label>
 
-                <div className="order-3 min-w-0 md:col-span-2">
+                <div className="order-3 min-w-0">
                   <span className="mb-1.5 block text-[9px] font-black uppercase tracking-[0.14em] text-white/30">
                     Categorias
                   </span>
@@ -2972,17 +3116,6 @@ export default function InstanceManager({
                             Limpar categorias
                           </button>
                         )}
-                        <div
-                          aria-hidden="true"
-                          className="flex items-center justify-end gap-3 px-2 py-1 text-[9px] font-bold uppercase"
-                        >
-                          <span className="flex items-center gap-1 text-emerald-300">
-                            <Check size={10} strokeWidth={3} /> Incluir
-                          </span>
-                          <span className="flex items-center gap-1 text-red-300">
-                            <X size={10} strokeWidth={3} /> Negar
-                          </span>
-                        </div>
                         {categoriasDaFonte.map((categoria) => {
                           const incluida = categoriasIncluidas.has(categoria.id);
                           const negada = categoriasNegadas.has(categoria.id);
@@ -3001,12 +3134,6 @@ export default function InstanceManager({
                                 !incluida && !negada && "hover:bg-white/5"
                               )}
                             >
-                              <span className={cn(
-                                "min-w-0 flex-1 truncate px-1",
-                                incluida ? "text-emerald-200" : negada ? "text-red-200" : "text-white/60"
-                              )}>
-                                {categoria.nome}
-                              </span>
                               <button
                                 type="button"
                                 aria-label={`${incluida ? "Remover inclusão de" : "Incluir"} ${categoria.nome}`}
@@ -3041,6 +3168,12 @@ export default function InstanceManager({
                               >
                                 <X size={11} strokeWidth={3} />
                               </button>
+                              <span className={cn(
+                                "min-w-0 flex-1 truncate px-1",
+                                incluida ? "text-emerald-200" : negada ? "text-red-200" : "text-white/60"
+                              )}>
+                                {categoria.nome}
+                              </span>
                             </div>
                           );
                         })}
@@ -3084,7 +3217,7 @@ export default function InstanceManager({
                   <div>
                     <div
                       className={cn(
-                        "sticky top-0 z-10 grid grid-cols-[2rem_3rem_minmax(0,1fr)_3.5rem_8rem]",
+                        "sticky top-0 z-10 grid grid-cols-[2rem_3rem_minmax(0,1fr)_3.5rem_7.5rem_8rem]",
                         "items-center gap-x-4 border-b border-white/5",
                         "bg-[#0d0d0e] px-6 py-2 text-xs text-white/40"
                       )}
@@ -3105,12 +3238,13 @@ export default function InstanceManager({
                       <div />
                       <div className="min-w-0">Nome</div>
                       <div className="text-right">Ativo</div>
+                      <div className="text-center">Versão</div>
                       <div />
                     </div>
 
                     {filteredContent.map((mod: InstalledMod) => (
                       <div
-                        key={mod.fileName}
+                        key={mod.fileName.replace(/\.disabled$/i, "").toLowerCase()}
                         onContextMenu={(evento) => {
                           evento.preventDefault();
                           evento.stopPropagation();
@@ -3122,7 +3256,7 @@ export default function InstanceManager({
                           });
                         }}
                         className={cn(
-                          "group grid grid-cols-[2rem_3rem_minmax(0,1fr)_3.5rem_8rem]",
+                          "group grid grid-cols-[2rem_3rem_minmax(0,1fr)_3.5rem_7.5rem_8rem]",
                           "items-center gap-x-4 border-b border-white/5 px-6 py-3 hover:bg-white/2"
                         )}
                       >
@@ -3138,7 +3272,23 @@ export default function InstanceManager({
                             type="checkbox"
                             checked={arquivosSelecionados.has(mod.fileName)}
                             onChange={() => alternarSelecaoArquivo(mod.fileName)}
-                            className="w-4 h-4 rounded border-white/20 bg-white/5"
+                            disabled={
+                              arquivosSelecionados.has(mod.fileName) && !arquivosMarcados.has(mod.fileName)
+                            }
+                            aria-label={
+                              arquivosSelecionados.has(mod.fileName) && !arquivosMarcados.has(mod.fileName)
+                                ? `${mod.name} selecionado porque depende de outro mod marcado`
+                                : `Selecionar ${mod.name}`
+                            }
+                            title={
+                              arquivosSelecionados.has(mod.fileName) && !arquivosMarcados.has(mod.fileName)
+                                ? "Selecionado porque depende de outro mod marcado"
+                                : undefined
+                            }
+                            className={cn(
+                              "h-4 w-4 rounded border-white/20 bg-white/5",
+                              "disabled:cursor-not-allowed disabled:opacity-60"
+                            )}
                           />
                         </div>
 
@@ -3185,6 +3335,26 @@ export default function InstanceManager({
                                 mod.enabled ? "left-5" : "left-0.5"
                               )}
                             />
+                          </button>
+                        </div>
+
+                        <div className="flex items-center justify-center">
+                          <button
+                            type="button"
+                            onClick={() => abrirTrocaVersao(mod, activeFilter)}
+                            disabled={!mod.projectId || !mod.source}
+                            aria-label={`Trocar versão de ${mod.name}. Versão atual ${mod.version || "desconhecida"}`}
+                            title="Trocar versão"
+                            className={cn(
+                              "flex w-full max-w-[7rem] items-center justify-center gap-1.5 overflow-hidden",
+                              "whitespace-nowrap rounded border px-2.5 py-1.5",
+                              "border-white/10 bg-white/[0.035] text-[11px] font-bold text-white/55",
+                              "transition-colors hover:bg-white/[0.07] hover:text-white",
+                              "disabled:cursor-not-allowed disabled:opacity-30"
+                            )}
+                          >
+                            <RefreshCw size={11} className="shrink-0" />
+                            <span className="truncate tabular-nums">{mod.version || "—"}</span>
                           </button>
                         </div>
 
@@ -3605,8 +3775,15 @@ export default function InstanceManager({
             <ItemMenuContextual icone={<Plus size={13} />} onClick={() => {
               alternarSelecaoArquivo(menuConteudo.item.fileName);
               setMenuConteudo(null);
-            }}>
-              {arquivosSelecionados.has(menuConteudo.item.fileName) ? "Remover da seleção" : "Selecionar"}
+            }} disabled={
+              arquivosSelecionados.has(menuConteudo.item.fileName)
+                && !arquivosMarcados.has(menuConteudo.item.fileName)
+            }>
+              {arquivosSelecionados.has(menuConteudo.item.fileName)
+                ? arquivosMarcados.has(menuConteudo.item.fileName)
+                  ? "Remover da seleção"
+                  : "Selecionado por dependência"
+                : "Selecionar"}
             </ItemMenuContextual>
             <SeparadorMenuContextual />
             <ItemMenuContextual icone={<Trash2 size={13} />} perigo onClick={() => {
@@ -3631,7 +3808,7 @@ export default function InstanceManager({
             role="dialog"
             aria-modal="true"
             aria-labelledby="titulo-trocar-versao"
-            className="isolate flex max-h-[78vh] w-full max-w-xl flex-col overflow-hidden rounded-xl border border-white/15 bg-[#151516] shadow-2xl"
+            className="isolate flex h-[78vh] max-h-[44rem] w-full max-w-xl flex-col overflow-hidden rounded-xl border border-white/15 bg-[#151516] shadow-2xl"
             onMouseDown={(evento) => evento.stopPropagation()}
           >
             <div className="relative z-10 flex shrink-0 items-start justify-between gap-4 border-b border-white/8 bg-[#151516] px-5 py-4">
@@ -3668,7 +3845,7 @@ export default function InstanceManager({
             </div>
 
             <AreaRolagemPersonalizada
-              className="flex-1"
+              className="min-h-0 flex-1"
               classNameConteudo="p-3 pb-5"
               rotulo="Lista de versões disponíveis"
             >

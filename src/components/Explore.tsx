@@ -355,8 +355,8 @@ export default function Explore({
 
   useEffect(() => {
     const aceitaLoader = contentType === "mod" || contentType === "modpack";
-    if (!aceitaLoader || !versaoMinecraft) setLoader("");
-  }, [contentType, versaoMinecraft]);
+    if (!aceitaLoader) setLoader("");
+  }, [contentType]);
 
   const buscarEmFontes = useCallback(async (
     q: string,
@@ -808,25 +808,42 @@ export default function Explore({
 
           <div className="flex-1" />
 
-          <button
-            type="button"
-            onClick={() => setFiltrosAbertos((abertos) => !abertos)}
-            className={cn(
-              "flex shrink-0 items-center gap-2 rounded-xl border px-3 py-2 text-xs font-bold transition-all",
-              filtrosAbertos || quantidadeFiltrosAtivos > 0
-                ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-300"
-                : "border-white/10 bg-white/5 text-white/50 hover:text-white"
-            )}
-            aria-expanded={filtrosAbertos}
-          >
-            <Filter size={14} />
-            Filtros
+          <div className="flex shrink-0 items-center gap-2">
             {quantidadeFiltrosAtivos > 0 && (
-              <span className="rounded bg-emerald-400 px-1.5 py-0.5 text-[9px] text-black">
-                {quantidadeFiltrosAtivos}
-              </span>
+              <button
+                type="button"
+                onClick={limparFiltros}
+                aria-label="Limpar filtros"
+                className={cn(
+                  "flex shrink-0 items-center gap-1.5 rounded-xl px-2.5 py-2 text-xs font-bold",
+                  "text-white/40 transition-colors hover:bg-white/5 hover:text-white"
+                )}
+              >
+                <X size={12} />
+                Limpar
+              </button>
             )}
-          </button>
+
+            <button
+              type="button"
+              onClick={() => setFiltrosAbertos((abertos) => !abertos)}
+              className={cn(
+                "flex shrink-0 items-center gap-2 rounded-xl border px-3 py-2 text-xs font-bold transition-all",
+                filtrosAbertos || quantidadeFiltrosAtivos > 0
+                  ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-300"
+                  : "border-white/10 bg-white/5 text-white/50 hover:text-white"
+              )}
+              aria-expanded={filtrosAbertos}
+            >
+              <Filter size={14} />
+              Filtros
+              {quantidadeFiltrosAtivos > 0 && (
+                <span className="rounded bg-emerald-400 px-1.5 py-0.5 text-[9px] text-black">
+                  {quantidadeFiltrosAtivos}
+                </span>
+              )}
+            </button>
+          </div>
 
         </div>
 
@@ -843,8 +860,8 @@ export default function Explore({
               }
             >
               <div className={cn(
-                "grid gap-3 rounded-2xl border border-white/10 bg-white/[0.035] p-3 md:grid-cols-2",
-                "xl:grid-cols-4"
+                "grid grid-cols-[minmax(0,0.9fr)_minmax(0,1fr)_minmax(0,0.85fr)_minmax(0,1fr)_minmax(0,1.55fr)]",
+                "gap-2 rounded-2xl border border-white/10 bg-white/[0.035] p-3"
               )}>
                 <div className="order-2 min-w-0">
                   <span className="mb-1.5 block text-[10px] font-bold uppercase tracking-wider text-white/35">
@@ -949,9 +966,8 @@ export default function Explore({
                     <select
                       value={loader}
                       aria-label="Modloader"
-                      title={!versaoMinecraft ? "Escolha uma versão do Minecraft primeiro" : undefined}
                       onChange={(evento) => setLoader(evento.target.value as LoaderFiltro)}
-                      disabled={!versaoMinecraft || !["mod", "modpack"].includes(contentType)}
+                      disabled={!["mod", "modpack"].includes(contentType)}
                       className={cn(
                         "w-full appearance-none rounded-xl border border-white/10 bg-[#171717]",
                         "px-3 py-2 pr-9 text-xs font-bold text-white outline-none focus:border-emerald-500/50",
@@ -1047,7 +1063,7 @@ export default function Explore({
                   </div>
                 </div>
 
-                <div className="order-5 min-w-0 md:col-span-2 xl:col-span-4">
+                <div className="order-5 min-w-0">
                   <span className="mb-1.5 block text-[10px] font-bold uppercase tracking-wider text-white/35">
                     Categorias
                   </span>
@@ -1108,17 +1124,6 @@ export default function Explore({
                               Limpar categorias
                             </button>
                           )}
-                          <div
-                            aria-hidden="true"
-                            className="flex items-center justify-end gap-3 px-2 py-1 text-[9px] font-bold uppercase"
-                          >
-                            <span className="flex items-center gap-1 text-emerald-300">
-                              <Check size={10} strokeWidth={3} /> Incluir
-                            </span>
-                            <span className="flex items-center gap-1 text-red-300">
-                              <X size={10} strokeWidth={3} /> Negar
-                            </span>
-                          </div>
                           {categoriasDaFonte.map((item) => {
                             const incluida = categoriasIncluidas.some(
                               (categoria) => categoria.id === item.id
@@ -1139,12 +1144,6 @@ export default function Explore({
                                   !incluida && !negada && "hover:bg-white/5"
                                 )}
                               >
-                                <span className={cn(
-                                  "min-w-0 flex-1 truncate px-1",
-                                  incluida ? "text-emerald-200" : negada ? "text-red-200" : "text-white/60"
-                                )}>
-                                  {item.nome}
-                                </span>
                                 <button
                                   type="button"
                                   aria-label={`${incluida ? "Remover inclusão de" : "Incluir"} ${item.nome}`}
@@ -1179,6 +1178,12 @@ export default function Explore({
                                 >
                                   <X size={11} strokeWidth={3} />
                                 </button>
+                                <span className={cn(
+                                  "min-w-0 flex-1 truncate px-1",
+                                  incluida ? "text-emerald-200" : negada ? "text-red-200" : "text-white/60"
+                                )}>
+                                  {item.nome}
+                                </span>
                               </div>
                             );
                           })}
@@ -1191,20 +1196,11 @@ export default function Explore({
                 <div className="order-1 min-w-0">
                   <span
                     className={cn(
-                      "mb-1.5 flex items-center justify-between text-[10px] font-bold uppercase",
+                      "mb-1.5 block text-[10px] font-bold uppercase",
                       "tracking-wider text-white/35"
                     )}
                   >
                     Ordenar por
-                    {quantidadeFiltrosAtivos > 0 && (
-                      <button
-                        type="button"
-                        onClick={limparFiltros}
-                        className="flex items-center gap-1 text-white/40 transition-colors hover:text-white"
-                      >
-                        <X size={10} /> Limpar
-                      </button>
-                    )}
                   </span>
                   <div className="relative">
                     <select

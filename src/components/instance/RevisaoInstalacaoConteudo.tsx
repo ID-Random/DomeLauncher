@@ -1,7 +1,6 @@
 import { useEffect, useState } from "react";
 import {
     AlertCircle,
-    Check,
     ChevronDown,
     Download,
     Loader2,
@@ -9,11 +8,13 @@ import {
     X,
 } from "../../iconesPixelados";
 import { cn } from "../../lib/utils";
+import { organizarPlanoInstalacao } from "../../lib/planoInstalacaoConteudo";
 
 export interface ItemPlanoInstalacaoConteudo {
     chave: string;
     projectId: string;
     nome: string;
+    iconeUrl?: string | null;
     nomeArquivo: string;
     versao: string;
     tipoVersao: string;
@@ -46,6 +47,18 @@ const ROTULOS_TIPO: Record<ItemPlanoInstalacaoConteudo["tipoProjeto"], string> =
     shader: "Shader",
 };
 
+const ROTULOS_GRUPO: Record<ItemPlanoInstalacaoConteudo["tipoProjeto"], string> = {
+    mod: "Mods",
+    resourcepack: "Resource packs",
+    shader: "Shaders",
+};
+
+const ORDEM_TIPOS_PROJETO: ItemPlanoInstalacaoConteudo["tipoProjeto"][] = [
+    "mod",
+    "resourcepack",
+    "shader",
+];
+
 const ROTULOS_VERSAO: Record<string, string> = {
     release: "Estável",
     beta: "Beta",
@@ -53,6 +66,28 @@ const ROTULOS_VERSAO: Record<string, string> = {
 };
 
 const CLASSES_ROTULO_DETALHE = "text-[9px] font-black uppercase tracking-wider text-white/25";
+
+function ImagemConteudoPlano({ url, nome }: { url?: string | null; nome: string }) {
+    const [falhou, setFalhou] = useState(false);
+
+    useEffect(() => {
+        setFalhou(false);
+    }, [url]);
+
+    if (!url || falhou) {
+        return <Package size={16} aria-hidden="true" />;
+    }
+
+    return (
+        <img
+            src={url}
+            alt={`Ícone de ${nome}`}
+            loading="lazy"
+            onError={() => setFalhou(true)}
+            className="h-full w-full object-cover"
+        />
+    );
+}
 
 export default function RevisaoInstalacaoConteudo({
     aberto,
@@ -74,6 +109,11 @@ export default function RevisaoInstalacaoConteudo({
 
     const selecionados = plano.filter((item) => item.selecionado).length;
     const dependencias = plano.length - selecionados;
+    const gruposPlano = ORDEM_TIPOS_PROJETO.map((tipoProjeto) => ({
+        tipoProjeto,
+        totalUnicos: plano.filter((item) => item.tipoProjeto === tipoProjeto).length,
+        itens: organizarPlanoInstalacao(plano, tipoProjeto),
+    })).filter((grupo) => grupo.itens.length > 0);
 
     const alternarDetalhes = (chave: string) => {
         setExpandidos((atuais) => {
@@ -141,117 +181,149 @@ export default function RevisaoInstalacaoConteudo({
                             <p className="mt-1 max-w-xl text-xs text-red-100/60">{erro}</p>
                         </div>
                     ) : (
-                        <div className="space-y-1.5">
-                            {plano.map((item, indice) => {
-                                const expandido = expandidos.has(item.chave);
-                                return (
-                                    <article
-                                        key={item.chave}
-                                        className={cn(
-                                            "overflow-hidden rounded-xl border transition-colors",
-                                            item.selecionado
-                                                ? "border-white/10 bg-white/[0.035]"
-                                                : "border-emerald-400/10 bg-emerald-400/[0.035]"
-                                        )}
-                                    >
-                                        <button
-                                            type="button"
-                                            onClick={() => alternarDetalhes(item.chave)}
-                                            className={cn(
-                                                "grid w-full grid-cols-[1.6rem_2.3rem_minmax(0,1fr)_auto]",
-                                                "items-center gap-3 px-3 py-3 text-left hover:bg-white/[0.025]"
-                                            )}
+                        <div className="space-y-4">
+                            {gruposPlano.map((grupo) => (
+                                <section
+                                    key={grupo.tipoProjeto}
+                                    aria-labelledby={`titulo-grupo-${grupo.tipoProjeto}`}
+                                >
+                                    <div className="mb-1.5 flex items-center justify-between gap-3 px-1">
+                                        <h3
+                                            id={`titulo-grupo-${grupo.tipoProjeto}`}
+                                            className="text-[10px] font-black uppercase tracking-[0.16em] text-white/45"
                                         >
-                                            <span className={cn(
-                                                "grid h-5 w-5 place-items-center rounded border",
-                                                "border-emerald-400/35 bg-emerald-400/15 text-emerald-300"
-                                            )}>
-                                                <Check size={12} />
-                                            </span>
-                                            <span className={cn(
-                                                "grid h-9 w-9 place-items-center rounded-lg",
-                                                "bg-black/25 text-white/35"
-                                            )}>
-                                                <Package size={16} />
-                                            </span>
-                                            <span className="min-w-0">
-                                                <span className="flex flex-wrap items-center gap-2">
-                                                    <span className="truncate text-sm font-bold text-white">
-                                                        {item.nome}
-                                                    </span>
-                                                    {!item.selecionado && (
-                                                        <span className={cn(
-                                                            "rounded bg-emerald-400/12 px-1.5 py-0.5 text-[9px]",
-                                                            "font-black uppercase tracking-wider text-emerald-300"
-                                                        )}>
-                                                            Dependência
-                                                        </span>
-                                                    )}
-                                                </span>
-                                                <span className="mt-0.5 block truncate text-[11px] text-white/35">
-                                                    {indice + 1}. {item.nomeArquivo}
-                                                </span>
-                                            </span>
-                                            <ChevronDown
-                                                size={15}
-                                                className={cn(
-                                                    "text-white/30 transition-transform",
-                                                    expandido && "rotate-180"
-                                                )}
-                                            />
-                                        </button>
+                                            {ROTULOS_GRUPO[grupo.tipoProjeto]}
+                                        </h3>
+                                        <span className="text-[10px] font-bold tabular-nums text-white/25">
+                                            {grupo.totalUnicos} arquivo{grupo.totalUnicos === 1 ? "" : "s"} único{
+                                                grupo.totalUnicos === 1 ? "" : "s"
+                                            }
+                                        </span>
+                                    </div>
 
-                                        {expandido && (
-                                            <dl className={cn(
-                                                "grid gap-x-6 gap-y-2 border-t border-white/6 bg-black/10",
-                                                "px-4 py-3 text-xs sm:grid-cols-2"
-                                            )}>
-                                                <div>
-                                                    <dt className={CLASSES_ROTULO_DETALHE}>
-                                                        Arquivo
-                                                    </dt>
-                                                    <dd className="mt-0.5 break-all text-white/65">
-                                                        {item.nomeArquivo}
-                                                    </dd>
-                                                </div>
-                                                <div>
-                                                    <dt className={CLASSES_ROTULO_DETALHE}>
-                                                        Provedor
-                                                    </dt>
-                                                    <dd className="mt-0.5 capitalize text-white/65">
-                                                        {item.plataforma}
-                                                    </dd>
-                                                </div>
-                                                <div>
-                                                    <dt className={CLASSES_ROTULO_DETALHE}>
-                                                        Versão
-                                                    </dt>
-                                                    <dd className="mt-0.5 text-white/65">{item.versao}</dd>
-                                                </div>
-                                                <div>
-                                                    <dt className={CLASSES_ROTULO_DETALHE}>
-                                                        Tipo
-                                                    </dt>
-                                                    <dd className="mt-0.5 text-white/65">
-                                                        {ROTULOS_TIPO[item.tipoProjeto]} ·{" "}
-                                                        {ROTULOS_VERSAO[item.tipoVersao] || item.tipoVersao}
-                                                    </dd>
-                                                </div>
-                                                {item.requeridoPor.length > 0 && (
-                                                    <div className="sm:col-span-2">
-                                                        <dt className={CLASSES_ROTULO_DETALHE}>
-                                                            Requerido por
-                                                        </dt>
-                                                        <dd className="mt-0.5 text-emerald-200/70">
-                                                            {item.requeridoPor.join(", ")}
-                                                        </dd>
-                                                    </div>
-                                                )}
-                                            </dl>
-                                        )}
-                                    </article>
-                                );
-                            })}
+                                    <div className="space-y-1.5">
+                                        {grupo.itens.map(({ item, numero, nivel, chaveOcorrencia }) => {
+                                            const expandido = expandidos.has(chaveOcorrencia);
+                                            const dependenciaVisual = nivel > 0 || !item.selecionado;
+                                            return (
+                                                <article
+                                                    key={chaveOcorrencia}
+                                                    style={{ marginLeft: `${Math.min(nivel, 3) * 20}px` }}
+                                                    className={cn(
+                                                        "relative overflow-hidden rounded-xl border transition-colors",
+                                                        dependenciaVisual
+                                                            && "before:absolute before:bottom-0 before:left-0 before:top-0 before:w-0.5",
+                                                        dependenciaVisual
+                                                            && "before:bg-emerald-400/45",
+                                                        !dependenciaVisual
+                                                            ? "border-white/10 bg-white/[0.035]"
+                                                            : "border-emerald-400/10 bg-emerald-400/[0.035]"
+                                                    )}
+                                                >
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => alternarDetalhes(chaveOcorrencia)}
+                                                        className={cn(
+                                                            "grid w-full grid-cols-[2.8rem_2.3rem_minmax(0,1fr)_auto]",
+                                                            "items-center gap-3 px-3 py-3 text-left hover:bg-white/[0.025]"
+                                                        )}
+                                                    >
+                                                        <span className={cn(
+                                                            "rounded border px-1.5 py-1 text-center text-[10px] font-black",
+                                                            "tabular-nums border-emerald-400/30 bg-emerald-400/10 text-emerald-300"
+                                                        )}>
+                                                            {numero}
+                                                        </span>
+                                                        <span className={cn(
+                                                            "grid h-9 w-9 place-items-center overflow-hidden rounded-lg",
+                                                            "bg-black/25 text-white/35"
+                                                        )}>
+                                                            <ImagemConteudoPlano
+                                                                url={item.iconeUrl}
+                                                                nome={item.nome}
+                                                            />
+                                                        </span>
+                                                        <span className="min-w-0">
+                                                            <span className="flex flex-wrap items-center gap-2">
+                                                                <span className="truncate text-sm font-bold text-white">
+                                                                    {item.nome}
+                                                                </span>
+                                                                {dependenciaVisual && (
+                                                                    <span className={cn(
+                                                                        "rounded bg-emerald-400/12 px-1.5 py-0.5 text-[9px]",
+                                                                        "font-black uppercase tracking-wider text-emerald-300"
+                                                                    )}>
+                                                                        Dependência
+                                                                    </span>
+                                                                )}
+                                                            </span>
+                                                            <span className="mt-0.5 block truncate text-[11px] text-white/35">
+                                                                {item.nomeArquivo}
+                                                            </span>
+                                                        </span>
+                                                        <ChevronDown
+                                                            size={15}
+                                                            className={cn(
+                                                                "text-white/30 transition-transform",
+                                                                expandido && "rotate-180"
+                                                            )}
+                                                        />
+                                                    </button>
+
+                                                    {expandido && (
+                                                        <dl className={cn(
+                                                            "grid gap-x-6 gap-y-2 border-t border-white/6 bg-black/10",
+                                                            "px-4 py-3 text-xs sm:grid-cols-2"
+                                                        )}>
+                                                            <div>
+                                                                <dt className={CLASSES_ROTULO_DETALHE}>
+                                                                    Arquivo
+                                                                </dt>
+                                                                <dd className="mt-0.5 break-all text-white/65">
+                                                                    {item.nomeArquivo}
+                                                                </dd>
+                                                            </div>
+                                                            <div>
+                                                                <dt className={CLASSES_ROTULO_DETALHE}>
+                                                                    Provedor
+                                                                </dt>
+                                                                <dd className="mt-0.5 capitalize text-white/65">
+                                                                    {item.plataforma}
+                                                                </dd>
+                                                            </div>
+                                                            <div>
+                                                                <dt className={CLASSES_ROTULO_DETALHE}>
+                                                                    Versão
+                                                                </dt>
+                                                                <dd className="mt-0.5 text-white/65">{item.versao}</dd>
+                                                            </div>
+                                                            <div>
+                                                                <dt className={CLASSES_ROTULO_DETALHE}>
+                                                                    Tipo
+                                                                </dt>
+                                                                <dd className="mt-0.5 text-white/65">
+                                                                    {ROTULOS_TIPO[item.tipoProjeto]} ·{" "}
+                                                                    {ROTULOS_VERSAO[item.tipoVersao] || item.tipoVersao}
+                                                                </dd>
+                                                            </div>
+                                                            {item.requeridoPor.length > 0 && (
+                                                                <div className="sm:col-span-2">
+                                                                    <dt className={CLASSES_ROTULO_DETALHE}>
+                                                                        Requerido por
+                                                                    </dt>
+                                                                    <dd className="mt-0.5 text-emerald-200/70">
+                                                                        {item.requeridoPor.join(", ")}
+                                                                    </dd>
+                                                                </div>
+                                                            )}
+                                                        </dl>
+                                                    )}
+                                                </article>
+                                            );
+                                        })}
+                                    </div>
+                                </section>
+                            ))}
                         </div>
                     )}
                 </div>
@@ -276,7 +348,7 @@ export default function RevisaoInstalacaoConteudo({
                     )}
                     <div className="flex items-center justify-between gap-3">
                         <p className="hidden text-[11px] text-white/30 sm:block">
-                            A ordem mostrada é a ordem de instalação.
+                            Dependências compartilhadas aparecem em cada mod, mas são baixadas uma única vez.
                         </p>
                         <div className="ml-auto flex gap-2">
                             <button
