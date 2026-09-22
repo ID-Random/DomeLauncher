@@ -24,6 +24,7 @@ import { autenticarComMicrosoft } from "./lib/autenticacaoMicrosoft";
 import { OnboardingLauncher } from "./components/OnboardingLauncher";
 import CreateInstanceModal from "./components/CreateInstanceModal";
 import CreatingInstancesOverlay from "./components/CreatingInstancesOverlay";
+import IndicadorExclusoesInstancias from "./components/IndicadorExclusoesInstancias";
 import { useLauncher, type Instance } from "./hooks/useLauncher";
 import { useBreakpointXl } from "./hooks/useBreakpointXl";
 import type { AbaOrigemProjeto, ProjetoConteudo } from "./components/ProjetoDetalheModal";
@@ -238,6 +239,7 @@ export default function App() {
     total?: number;
   } | null>(null);
   const [projetoDetalhe, setProjetoDetalhe] = useState<ProjetoConteudo | null>(null);
+  const [instalacaoDiretaProjetoId, setInstalacaoDiretaProjetoId] = useState<string | null>(null);
   const [atividadeSocialDetalhe, setAtividadeSocialDetalhe] = useState<AmigoSocial | null>(null);
   const [abaOrigemProjeto, setAbaOrigemProjeto] = useState<AbaOrigemProjeto>("home");
   const [corDestaque, setCorDestaque] = useState("#10B981");
@@ -1510,7 +1512,12 @@ export default function App() {
               >
                 <Explore
                   onAtualizarPresencaExplore={setContextoExplore}
-                  onAbrirProjeto={(projeto) => abrirProjeto("explore", projeto)}
+                  onAbrirProjeto={(projeto, instalarAgora) => {
+                    setInstalacaoDiretaProjetoId(
+                      instalarAgora && projeto.project_type === "modpack" ? projeto.id : null
+                    );
+                    abrirProjeto("explore", projeto);
+                  }}
                 />
               </motion.div>
             )}
@@ -1548,12 +1555,15 @@ export default function App() {
                   usuarioLogado={Boolean(user)}
                   onSolicitarLogin={() => setIsLoginOpen(true)}
                   onInstanciaCriada={() => void fetchInstances()}
+                  instalarAoAbrir={instalacaoDiretaProjetoId === projetoDetalhe.id}
+                  onInstalacaoAutomaticaIniciada={() => setInstalacaoDiretaProjetoId(null)}
                   rotuloAcao={
                     abaOrigemProjeto === "home" || abaOrigemProjeto === "instances"
                       ? "Baixar"
                       : "Instalar"
                   }
                   onVoltar={() => {
+                    setInstalacaoDiretaProjetoId(null);
                     navegarParaAba(abaOrigemProjeto);
                     setProjetoDetalhe(null);
                   }}
@@ -1738,6 +1748,7 @@ export default function App() {
             </motion.footer>
           )}
         </AnimatePresence>
+        <IndicadorExclusoesInstancias />
       </main>
 
         <div

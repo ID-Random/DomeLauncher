@@ -220,7 +220,7 @@ interface ExploreProps {
     fonte: Source | "ambas";
     titulo?: string;
   }) => void;
-  onAbrirProjeto: (projeto: ProjetoConteudo) => void;
+  onAbrirProjeto: (projeto: ProjetoConteudo, instalarAgora?: boolean) => void;
 }
 
 export default function Explore({
@@ -689,12 +689,12 @@ export default function Explore({
     }
   };
 
-  const abrirDetalheProjeto = (item: SearchResult) => {
+  const abrirDetalheProjeto = (item: SearchResult, instalarAgora = false) => {
     const variante = item.variantes[FONTE_PRIORITARIA] || item.variantes.curseforge || item;
     onAbrirProjeto({
       ...variante,
       icon_url: variante.icon_url || "",
-    });
+    }, instalarAgora);
   };
 
   const fontesMarcadas = FONTES.filter((fonte) => fontesSelecionadas[fonte]);
@@ -1343,7 +1343,7 @@ export default function Explore({
                   <button
                     onClick={(e) => {
                       e.stopPropagation();
-                      abrirDetalheProjeto(item);
+                      abrirDetalheProjeto(item, true);
                     }}
                     className="px-4 py-2 rounded-xl text-xs font-bold transition-all active:scale-95 flex items-center gap-1.5 bg-emerald-500 hover:bg-emerald-400 text-black"
                   >

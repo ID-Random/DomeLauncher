@@ -442,6 +442,9 @@ fontes marcadas, o filtro de categoria fica desativado para não tratar taxonomi
 combina inclusão e negação nas facetas do Modrinth, envia somente as inclusões em `categoryIds` ao CurseForge e
 remove localmente os resultados das categorias negadas. Se uma taxonomia estiver temporariamente indisponível,
 a outra ainda pode preencher o seletor.
+No Explorar, o botão `Instalar` de um modpack inicia a criação da instância usando sua versão publicada mais recente
+compatível com os loaders aceitos pelo launcher e que tenha um arquivo instalável; abrir o cartão do projeto continua
+mostrando os detalhes sem iniciar a instalação.
 Em `Adicionar conteúdo`, a interface sempre envia a versão do Minecraft da instância e, para mods, o loader atual;
 esses dois filtros de compatibilidade não são editáveis. Ordenação e categorias continuam opcionais. Antes de uma
 instalação em lote, `planejar_instalacao_conteudo` resolve o arquivo compatível de cada seleção e expande as

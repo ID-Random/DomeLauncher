@@ -43,6 +43,7 @@ import RevisaoInstalacaoConteudo, {
   type ItemPlanoInstalacaoConteudo,
 } from "./instance/RevisaoInstalacaoConteudo";
 import EditorIconeModal from "./editor-icone/EditorIconeModal";
+import ModalExclusaoInstancia from "./ModalExclusaoInstancia";
 import {
   CabecalhoMenuContextual,
   ItemMenuContextual,
@@ -592,6 +593,7 @@ export default function InstanceManager({
   const [selectedLog, setSelectedLog] = useState<string | null>(null);
   const [logContent, setLogContent] = useState("");
   const [showMoreMenu, setShowMoreMenu] = useState(false);
+  const [modalExclusaoAberto, setModalExclusaoAberto] = useState(false);
   const [updatingAll, setUpdatingAll] = useState(false);
   const [modoSelecaoLote, setModoSelecaoLote] = useState(false);
   const [arquivosMarcados, setArquivosMarcados] = useState<Set<string>>(new Set());
@@ -2284,21 +2286,22 @@ export default function InstanceManager({
     }
   };
 
-  const deleteInstance = async () => {
-    if (!confirm(`Excluir instância "${instanceDetails?.name}"? Esta ação não pode ser desfeita.`)) return;
+  const deleteInstance = () => {
+    setShowMoreMenu(false);
+    setModalExclusaoAberto(true);
+  };
+
+  const excluirInstanciaConfirmada = async (id: string) => {
+    await invoke("delete_instance", { id });
+
     try {
-      await invoke("delete_instance", { id: instanceId });
-
       const cacheConteudo = lerCacheConteudoInstalado();
-      removerCacheInstanciaInteira(cacheConteudo, instanceId);
+      removerCacheInstanciaInteira(cacheConteudo, id);
       salvarCacheConteudoInstalado(cacheConteudo);
-
-      onBack();
-      onInstanceUpdate?.();
-    } catch (error) {
-      console.error("Erro ao excluir:", error);
-      alert(`Erro: ${error}`);
+    } catch (erro) {
+      console.error("Instância apagada, mas houve falha ao limpar o cache de conteúdo:", erro);
     }
+    onInstanceUpdate?.();
   };
 
   const abrirPastaMundo = async (worldPath: string) => {
@@ -3951,6 +3954,14 @@ export default function InstanceManager({
             </div>
           </div>
         </div>
+      )}
+      {modalExclusaoAberto && instanceDetails && (
+        <ModalExclusaoInstancia
+          instancias={[{ id: instanceId, nome: instanceDetails.name }]}
+          aoFechar={() => setModalExclusaoAberto(false)}
+          aoExcluir={excluirInstanciaConfirmada}
+          aoIniciar={onBack}
+        />
       )}
       <EditorIconeModal
         aberto={editorIconeAberto}
