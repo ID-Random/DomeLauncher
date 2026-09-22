@@ -1,5 +1,32 @@
 # Comunicação do DomeLauncher com a API
 
+## Identidade Dome e onboarding
+
+O login Microsoft é a entrada principal do launcher. Após validar a conta Minecraft, o comando nativo troca o token
+Minecraft por uma sessão Dome em `POST /api/launcher/auth/minecraft/exchange`. A DomeAPI valida o token diretamente
+no serviço oficial, localiza o perfil pelo UUID ou cria um novo perfil, sem exigir Discord. A sessão social continua
+protegida no arquivo nativo `social-session.dat`.
+
+Contas Minecraft adicionais são vinculadas ao perfil Dome já autenticado por
+`POST /api/launcher/social/minecraft/link`. Trocar a conta ativa usada para jogar não altera automaticamente
+`contaMinecraftPrincipalUuid`, que representa apenas o avatar público escolhido para o perfil.
+
+O Discord é uma integração opcional em Configurações. `POST /api/launcher/social/discord/link` exige uma sessão Dome
+e OAuth PKCE; um Discord já associado a outro perfil não é transferido ou mesclado automaticamente.
+
+As Configurações oferecem dois fluxos de teste: reexibir somente o onboarding e esquecer todas as credenciais locais.
+O segundo encerra a presença social, remove `account.json`, `accounts.json` e `social-session.dat`, reinicia o
+onboarding e preserva instâncias, mundos, Java e configurações gerais.
+
+## Status de servidores Minecraft
+
+O comando nativo `ping_server` consulta o protocolo de status do Minecraft Java, tenta resolver registros DNS SRV
+por até 1,5 segundo quando o endereço não informa uma porta e então usa o host direto como fallback. O host digitado
+pelo jogador é mantido no handshake. A Home usa a resposta para
+mostrar ícone, MOTD, jogadores online/máximo e latência no card "Volte a jogar", com nova consulta a cada 30 segundos.
+Se o servidor aceitar a conexão TCP mas não responder ao protocolo de status, ele pode aparecer online sem MOTD ou
+contagem de jogadores.
+
 ## Texturas de skins e capas
 
 As prévias 3D e miniaturas usam `baixar_textura_minecraft` para obter texturas de
@@ -76,7 +103,8 @@ bucket e devolve uma URL pública em `/api/launcher/novidades/imagens/:arquivo`;
 ### Notícias oficiais do Minecraft
 
 A Home consulta pelo comando `get_minecraft_news` o sitemap oficial do `minecraft.net`, limita a resposta a dez itens
-e mantém um cache local de 30 minutos em `%APPDATA%/dome/cache`. Um espelho somente de leitura dos artigos oficiais
+e mantém um cache local de 30 minutos na pasta de dados do launcher (`%APPDATA%\dome\cache` no Windows,
+`~/.local/share/dome/cache` no Linux). Um espelho somente de leitura dos artigos oficiais
 é usado como contingência caso o site esteja indisponível. Ao selecionar uma notícia,
 `get_minecraft_article` aceita somente URLs HTTPS de artigos do domínio oficial e devolve uma estrutura com texto e
 imagens, em vez de HTML executável. A interface renderiza essa estrutura em um modal próprio e não executa scripts,
@@ -121,7 +149,8 @@ ao aplicativo Discord do servidor. A variável não altera a CSP: confira `conne
 `refresh_launcher_social_session`, recebe `{ accessToken, expiraEm }` e preserva o refresh token.
 Falha na renovação limpa a sessão local. Não presuma retry de toda requisição com 401 ou rotação de refresh token.
 
-`salvar_sessao_social_local` grava `%APPDATA%/dome/social-session.dat`, protegido por DPAPI no Windows;
+`salvar_sessao_social_local` grava `social-session.dat` na pasta de dados do launcher (`%APPDATA%\dome` no Windows,
+`~/.local/share/dome` no Linux), protegido por DPAPI no Windows;
 `carregar_sessao_social_local` recupera a sessão. A chave legada `dome:social:sessao` no `localStorage`
 é migrada e removida. Tokens ainda existem na memória do frontend para IPC/socket.
 
@@ -303,13 +332,14 @@ transferência pontual. Se essa remoção falhar, a limpeza periódica tenta nov
 Objetos de instâncias publicadas são compartilhados entre recebimentos e não são removidos pela confirmação;
 só saem quando a publicação correspondente é encerrada e limpa.
 
-A instalação social acontece em `.social-preparacao`, dentro da raiz de instâncias. A pasta só
-é disponibilizada após a preparação completa. O ícone do manifesto é aplicado à nova instância.
+A instalação social é preparada em `%APPDATA%/dome/temp/social/preparation` no Windows ou no diretório de dados
+equivalente do sistema. A instância só é disponibilizada após a preparação completa. O ícone do manifesto é aplicado à nova instância.
 Para Vanilla e Fabric, o recebimento baixa apenas os manifestos e o loader necessários; cliente, bibliotecas
 e assets do Minecraft são preparados pelo fluxo cacheado no primeiro lançamento. Forge e NeoForge continuam
 preparando esses arquivos durante a importação porque seus instaladores dependem deles. Recibos locais evitam
-reimportar o mesmo pedido se a confirmação remota falhar. O cache `.social-cache` reutiliza
-conteúdo referenciado por hash com cópias independentes.
+reimportar o mesmo pedido se a confirmação remota falhar. Os recibos ficam em `social/receipts` e o cache
+`cache/social` reutiliza conteúdo referenciado por hash com cópias independentes. Backups de migração de versão
+ficam em `backups/instances`. Pastas auxiliares legadas dentro da raiz de instâncias são migradas na inicialização.
 
 ### Publicações, participantes e atualizações
 
