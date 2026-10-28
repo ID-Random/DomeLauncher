@@ -106,6 +106,7 @@ pub fn run(contexto: tauri::Context<tauri::Wry>) {
             crate::comandos::modpacks::install_modpack_files,
             crate::comandos::projetos_conteudo::listar_conteudos_versao_projeto,
             crate::comandos::atualizacao_modpacks::trocar_versao_modpack_publico,
+            crate::comandos::modpacks::requisitos::obter_requisitos_modpack,
             crate::comandos::social_launcher::modpacks_dome::gerenciar_modpacks_dome,
             crate::comandos::social_launcher::modpacks_dome::enviar_midia_modpack_dome,
             crate::comandos::social_launcher::modpacks_dome::publicar_versao_modpack_dome,

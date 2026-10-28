@@ -235,6 +235,7 @@ mod testes {
         std::fs::create_dir_all(pasta.join("mods")).unwrap();
         let instancia: Instance = serde_json::from_value(serde_json::json!({
             "id": id, "name": "Minha aventura", "version": versao, "mcType": "fabric", "loaderType": "Fabric",
+            "loaderVersion": "0.16.10",
             "path": pasta, "created": "2026-10-27", "memory": 8192,
         })).unwrap();
         std::fs::write(
@@ -340,7 +341,7 @@ mod testes {
         let preparada = instancia_teste(&raiz, "preparacao", "1.20.1");
         let bytes = pacote(
             "modrinth.index.json",
-            serde_json::json!({"files": [{
+            serde_json::json!({"dependencies": {"minecraft": "1.20.1", "fabric-loader": "0.16.10"}, "files": [{
                 "path": "mods/novo.jar", "downloads": ["url invalida"]
             }]}),
         );
@@ -366,14 +367,15 @@ mod testes {
         std::fs::create_dir_all(&raiz).unwrap();
         let _limpeza =
             pacotes_sociais::PastaTemporaria::nova(raiz.parent().unwrap(), &raiz).unwrap();
+        let preparada = instancia_teste(&raiz, "preparacao", "1.20.1");
         let bytes = pacote(
             "modrinth.index.json",
-            serde_json::json!({"files": [{
+            serde_json::json!({"dependencies": {"minecraft": "1.20.1", "fabric-loader": "0.16.10"}, "files": [{
                 "path": "mods/../../fora.jar", "downloads": ["https://example.com/nao-consultar"]
             }]}),
         );
         let erro = modpacks::instalar_arquivos_em_pasta(
-            raiz.join("preparacao"),
+            preparada.path,
             String::new(),
             "pacote.zip".into(),
             Some(bytes),
