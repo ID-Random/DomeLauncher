@@ -179,14 +179,61 @@ um pacote remoto e abrir o jogo na janela nativa.
 A exclusão de instâncias exige confirmação e continua em segundo plano. O progresso percentual e erros aparecem
 em um indicador compacto, inclusive após navegar para outra aba. Exclusões adicionais aguardam em fila.
 
+Mods, Resource Packs e Shaders mantêm suas listas
+carregadas enquanto o gerenciador daquela instância estiver montado. Voltar a uma categoria ou à aba Conteúdo
+reutiliza os dados e a consulta que ainda estiver em andamento. Cada categoria tem seu indicador de carregamento;
+uma resposta de outra categoria não deve ocultar a carga atual. Importações e instalações relêem a categoria
+alterada; trocar o modpack invalida todas. Fechar a instância ou abrir outra encerra esse reaproveitamento.
+A ação Trocar versão do conteúdo instalado fica centralizada no rodapé do modal, inclusive na janela mínima.
+Duplo clique em Mods, Resource Packs ou Shaders abre a pasta correspondente da instância;
+um clique simples continua apenas selecionando a categoria.
+As abas Curseforge/Modrinth/Dome e Servidores permanecem montadas depois da primeira abertura até fechar
+a instância. Cada versão consultada em Mods conserva sua lista e a consulta pendente ao alternar abas.
+Os servidores preservam lista, status Online/Offline, MOTD, jogadores e ping; verificar manualmente continua
+atualizando o servidor. Reabrir a instância descarta esses dados; trocar o modpack renova as consultas da origem.
+
 Na lista de conteúdo instalado, o evento nativo de arraste copia arquivos `.jar` para `mods` ou `.zip` para
 `resourcepacks`/`shaderpacks`, conforme a categoria aberta. A importação preserva a origem, recusa arquivos inválidos
 e nomes já existentes (inclusive a variante desativada) e informa resultados parciais. A lista recarrega após a cópia;
 respostas antigas de identificação e atualização não devem substituir uma carga mais recente. Nome, Ativo e Versão
 alternam a direção da ordenação. Ícone e nome abrem a página interna quando há projeto e fonte identificados.
 Em Versão, o terceiro estado coloca atualizações disponíveis primeiro, mantendo o texto Versão e usando o ícone
-de recarregar no lugar da seta de ordenação. O botão de versão de cada item com
-atualização usa a cor de destaque do usuário e abre a escolha de versão; não há botão individual Atualizar na linha.
+de recarregar no lugar da seta de ordenação. O ícone e a numeração da versão têm molduras separadas.
+O ícone abre a escolha de versão e usa a cor de destaque quando há atualização; não há botão individual
+Atualizar na linha. Clicar na numeração abre a aba
+Changelog da versão instalada. No modal de troca, a aba Changelog fica visível desde a abertura e consulta
+a versão selecionada. Clicar no número de outra versão continua abrindo suas notas sem alterar a seleção.
+Nas páginas de projetos, os cartões somente selecionam a versão.
+A seleção é indicada somente pela cor do cartão; o selo INSTALADA fica no canto superior direito.
+A numeração da versão, o Minecraft suportado e o loader usam blocos separados dentro do cartão.
+Loader fica abaixo de MC. Projetos usam duas colunas por quatro linhas (8 versões por página).
+O painel de instalação do conteúdo permanece à direita da grade, inclusive em janelas menores,
+e acompanha a rolagem da página sem descer abaixo das versões nem criar rolagem interna.
+O modal Trocar versão usa três colunas por duas linhas, com seis versões por página.
+A troca de página preserva a versão selecionada e não refaz a consulta remota.
+O modal confere Minecraft e loader também nos metadados retornados, além dos filtros enviados à plataforma.
+A ausência dos textos de apoio não muda a compatibilidade nem a ordem de instalação: o arquivo anterior
+só é removido após instalar o novo com sucesso; falhas preservam o anterior.
+As abas Changelog e Mods (modpacks) ou
+Dependências (mods, texturas e shaders) ficam acessíveis diretamente e consultam a versão selecionada,
+sem botões adicionais nos cartões. Dependências podem incluir mods, texturas e shaders; itens opcionais são identificados.
+A aba Mods dos modpacks usa cartões em até três colunas, reduzindo para duas ou uma conforme a largura
+disponível do painel. Nome, arquivo e versão longos não podem alargar a grade.
+Na origem do modpack instalado, clicar no nome de um mod identificado abre sua página interna usando a fonte
+do próprio mod, inclusive quando difere da fonte do pacote. O nome não fica sublinhado, inclusive no hover.
+O restante do cartão não inicia navegação ou instalação.
+Voltar preserva a instância, a versão consultada e a lista já carregada; arquivos sem projeto identificado continuam como texto.
+Na lista de instâncias para instalação de conteúdo, a seleção usa o destaque verde original e as demais
+opções têm fundo neutro, com menor opacidade nas incompatíveis. Falhas de consulta continuam visíveis.
+Todas as Versões fica acima das instâncias, inclusive durante a busca, e mostra versões de qualquer
+Minecraft/loader, incluindo arquivos sem download. Nesse modo a instalação fica desativada; escolher uma
+instância restaura o filtro e as regras de instalação.
+Sem correspondência da versão instalada, informe
+a falha de identificação; nunca use as notas da versão mais recente como substituição.
+Instalação, download e troca de versão mostram o percentual nativo, com fases e unidades concluídas;
+não simule avanço por tempo. A barra inferior deixa somente o botão Jogar/Login/Encerrar interativo:
+texto, laterais e padding do rodapé não podem interceptar cliques nos elementos que estão atrás.
+A aba Mundos usa a soma recursiva real dos arquivos e mostra falha de leitura separadamente do estado vazio.
 Os indicadores dos cabeçalhos ocupam um espaço fixo; alternar a ordenação mantém a posição do texto e a altura
 do cabeçalho, sem remontar a lista nem consultar novamente o conteúdo. A verificação amostra essa transição por quadro.
 
@@ -198,10 +245,31 @@ Somente o gerenciador visível pode interceptar a navegação interna; o gerenci
 não deve consumir o clique em Voltar. O fluxo de Adicionar conteúdo também ocupa uma entrada no histórico.
 
 A aba Configuração também aparece em instâncias Vanilla.
+Ela oferece a seção Versão e Loader, no mesmo componente recolhível de Desempenho e Opções do Minecraft.
+Os três campos são Versão do Minecraft, Loader e Versão do Loader, com um único botão Alterar.
+A seção carrega as versões na primeira abertura e preserva escolhas e consultas ao recolher e expandir.
+Vanilla mantém Versão do Loader desativada. Sem mudança nos campos, Alterar permanece desativado.
+O seletor de Minecraft respeita Mostrar Snapshots (`show_snapshots`) das configurações globais,
+como a criação de instâncias: release sempre aparece, snapshot somente quando habilitado.
+A versão atualmente instalada continua visível mesmo se o filtro global a ocultaria.
+O aviso é curto, informa a prioridade de canais e a desativação de mods, sem o trecho sobre mundos e backup.
+A aplicação prepara backup e atualiza os mods reconhecidos com prioridade
+Estável → Beta → Alpha, escolhendo o mais recente dentro do canal compatível com Minecraft e loader.
+Mods sem identificação ou versão compatível ficam na instância como `.jar.disabled`; os que já estavam
+desativados conservam esse estado. Falhas de rede não são incompatibilidade: interrompem a preparação
+e preservam a instância anterior. A publicação só ocorre com o jogo fechado.
+`aplicacao/migracao_instancias.rs` concentra preparação, identificação, desativação e publicação;
+`aplicacao/mods_migracao.rs` concentra a preferência por estabilidade, sem alterar a seleção de instalações comuns.
+`bun run verificar:alteracao-ambiente` exercita os três campos nas quatro origens, preservação das escolhas ao
+recolher a seção sem nova consulta, releitura de conteúdo, falhas e Vanilla em 960×640 com IPC simulado.
+Os testes Rust cobrem seleção de versões,
+paginação/filtro CurseForge com HTTP local, preservação de arquivos e restauração após falha de publicação.
+Não substituem baixar mods remotos e abrir o jogo após uma migração real.
 As seções Desempenho e Opções do Minecraft começam recolhidas; seus títulos abrem e fecham os controles,
 preservando os campos e as edições em andamento ao recolher.
 Distância de renderização e Limite de FPS oferecem listas com todos os valores inteiros aceitos pelo backend;
 o limite de 260 FPS aparece como Ilimitado.
+Escala da interface usa o mesmo seletor, de 0 (Automática) a 3, com validação também no backend.
 A roda do mouse ajusta os campos numéricos, incluindo a passagem entre Padrão do jogo e o mínimo.
 Salvar Padrão do jogo remove apenas a chave conhecida correspondente de `options.txt`.
 `configuracoes_jogo.rs` lê as opções conhecidas de `options.txt` e salva somente os campos alterados,
@@ -209,6 +277,13 @@ preservando atalhos, opções de mods e chaves desconhecidas.
 A gravação substitui o arquivo por uma cópia temporária e exige que o Minecraft da instância esteja fechado.
 `bun run verificar:conteudo-instancia` exercita a interface em 960×640 e escala de 150%, com IPC e eventos Tauri
 simulados; não substitui arrastar arquivos do Explorador para a janela nativa nem conferir as opções dentro do jogo.
+`bun run verificar:changelog` exercita as quatro categorias de Modrinth/CurseForge e modpacks Dome com respostas
+simuladas, incluindo notas completas, seleção preservada, HTML sanitizado, vazio e erro com nova tentativa.
+`bun run verificar:paginacao-versoes` confere oito itens por página dos projetos, seis itens no modal,
+reposicionamento de Loader abaixo de MC e preservação da seleção sem nova consulta, com IPC simulado.
+`bun run verificar:compatibilidade-instancias` exercita a lista antes do clique, seleção sem nova consulta,
+agrupamento por Minecraft/loader, falhas e respostas atrasadas com IPC simulado. Não substitui conferir a listagem
+do projeto remoto na janela nativa.
 
 `aplicacao/downloads_instancias.rs` prepara cliente, bibliotecas e assets com até 32 transferências simultâneas.
 O cache fica em `pasta_dados_launcher()/cache/arquivos-minecraft` (`%APPDATA%\dome` no Windows,

@@ -5,8 +5,10 @@ import { AlertCircle, ChevronDown, ChevronUp, HardDrive, Monitor, Terminal } fro
 import { cn } from "../../lib/utils";
 import OpcoesJogo from "./OpcoesJogo";
 import SecaoConfiguracao from "./SecaoConfiguracao";
+import type { ReactNode } from "react";
 
 interface ConfiguracaoProps {
+    alteracoesAmbiente?: ReactNode;
     instanceId: string;
     memoriaPersonalizada?: number | null;
     argumentosJvm?: string | null;
@@ -59,6 +61,7 @@ function assinaturaResolucao(largura: number, altura: number): string {
 }
 
 export default function Configuracao({
+    alteracoesAmbiente,
     instanceId,
     memoriaPersonalizada,
     argumentosJvm,
@@ -215,6 +218,7 @@ export default function Configuracao({
 
     return (
         <div className="flex-1 space-y-5 overflow-y-auto p-6">
+            {alteracoesAmbiente}
             <SecaoConfiguracao titulo="Desempenho" icone={<HardDrive size={15} />}>
                 <div className="space-y-4 px-5 py-5">
                     <label className="flex w-fit cursor-pointer items-center gap-2.5">

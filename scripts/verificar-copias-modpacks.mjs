@@ -20,6 +20,7 @@ try {
     await servidor.listen();
     navegador = await chromium.launch({ channel: 'msedge', headless: true, timeout: 15000 });
     const pagina = await navegador.newPage({ viewport: { width: 1280, height: 800 } });
+    pagina.on('dialog', (dialogo) => dialogo.accept());
     pagina.setDefaultTimeout(15000);
     const erros = [];
     pagina.on('pageerror', (erro) => erros.push(erro.message));
@@ -30,9 +31,7 @@ try {
         })) : { id: 'pack', title: 'LostSMP', slug: 'lostsmp', project_type: 'modpack' },
     }));
     const base = servidor.resolvedUrls.local[0] + 'verificacao-modpacks';
-    const cartaoVersao = (numero) => pagina.getByRole('button').filter({
-        has: pagina.getByText(numero, { exact: true }),
-    });
+    const cartaoVersao = (numero) => pagina.getByRole('group', { name: `Versão ${numero}`, exact: true });
     for (const fonte of ['modrinth', 'curseforge', 'dome']) {
         await pagina.goto(`${base}?fonte=${fonte}`);
         await pagina.getByRole('heading', { name: 'LostSMP', exact: true }).click();
@@ -60,7 +59,7 @@ try {
         await pagina.getByRole('button', { name: 'Instalar', exact: true }).click();
         await pagina.waitForFunction(() => document.documentElement.dataset.concluidas === '2');
         await pagina.getByRole('button', { name: 'Versões', exact: true }).click();
-        await pagina.getByRole('button').filter({ has: pagina.getByText('1.0', { exact: true }) }).click();
+        await pagina.getByRole('button', { name: 'Selecionar versão 1.0', exact: true }).click();
         await pagina.getByRole('button', { name: 'Instalar', exact: true }).click();
         await pagina.waitForFunction(() => document.documentElement.dataset.concluidas === '3');
         await cartaoVersao('1.0').getByText('Instalada', { exact: true }).waitFor();
@@ -78,7 +77,7 @@ try {
     assert.equal(await instalado.isDisabled(), true);
     await pagina.getByRole('button', { name: 'Versões', exact: true }).click();
     await cartaoVersao('1.0').getByText('Instalada', { exact: true }).waitFor();
-    await pagina.getByRole('button').filter({ has: pagina.getByText('1.0', { exact: true }) }).click();
+    await pagina.getByRole('button', { name: 'Selecionar versão 1.0', exact: true }).click();
     await pagina.getByRole('button', { name: 'Trocar versão', exact: true }).click();
     await pagina.waitForFunction(() => document.documentElement.dataset.concluidas === '1');
     const troca = await pagina.evaluate(() => window.chamadas.find((item) => item.comando === 'instalar_modpack_dome'));

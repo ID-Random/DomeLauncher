@@ -102,10 +102,13 @@ fn preservar_pessoais(
             "natives",
             "logs",
             "crash-reports",
+            "version_manifest.json",
+            "minecraft.jar",
         ]
         .contains(&primeiro)
-            || (arquivo_vinculo == "modpack-dome.json"
-                && ["modpack-dome.json", "modpack.json"].contains(&primeiro))
+            || (["modpack-dome.json", "modpack-publico.json"].contains(&arquivo_vinculo)
+                && ["modpack-dome.json", "modpack-publico.json", "modpack.json"]
+                    .contains(&primeiro))
             || gerenciados.iter().any(|a| a.caminho == nome)
         {
             continue;
@@ -155,6 +158,22 @@ pub(crate) fn publicar_modpack_local(
         existente,
         Some(vinculo),
         "modpack-dome.json",
+    )
+}
+
+pub(crate) fn publicar_modpack_publico_local(
+    state: &LauncherState,
+    preparada: Instance,
+    antiga: Instance,
+    anterior: VinculoSocial,
+    novo: VinculoSocial,
+) -> Result<Instance, String> {
+    publicar_preparada(
+        state,
+        preparada,
+        Some((antiga, anterior)),
+        Some(novo),
+        "modpack-publico.json",
     )
 }
 

@@ -331,6 +331,7 @@ pub(crate) async fn delete_instance(
 pub(crate) fn abrir_pasta_instancia(
     state: State<'_, LauncherState>,
     instance_id: String,
+    tipo_conteudo: Option<String>,
 ) -> Result<(), String> {
     let caminho = caminho_instancia_por_id(&state, &instance_id)?;
     if !caminho.is_dir() {
@@ -340,7 +341,33 @@ pub(crate) fn abrir_pasta_instancia(
         ));
     }
 
-    open::that(caminho).map_err(|e| format!("Erro ao abrir pasta da instância: {}", e))
+    let destino = match tipo_conteudo {
+        Some(tipo) => preparar_pasta_conteudo_instancia(&caminho, &tipo)?,
+        None => caminho,
+    };
+    open::that(destino).map_err(|e| format!("Erro ao abrir pasta da instância: {}", e))
+}
+
+fn preparar_pasta_conteudo_instancia(
+    raiz: &std::path::Path,
+    tipo_conteudo: &str,
+) -> Result<std::path::PathBuf, String> {
+    let nome = match tipo_conteudo {
+        "mods" => "mods",
+        "resourcepacks" => "resourcepacks",
+        "shaders" => "shaderpacks",
+        _ => return Err("Categoria de conteúdo inválida.".to_string()),
+    };
+    let destino = raiz.join(nome);
+    if !destino.exists() {
+        std::fs::create_dir(&destino)
+            .map_err(|e| format!("Não foi possível criar a pasta de conteúdo: {e}"))?;
+    }
+    let validado = validar_caminho_dentro_raiz(raiz, &destino)?;
+    if !validado.is_dir() {
+        return Err("O destino do conteúdo não é uma pasta.".to_string());
+    }
+    Ok(validado)
 }
 
 #[tauri::command]
@@ -646,6 +673,36 @@ pub(crate) async fn rename_instance_folder(
 #[cfg(test)]
 mod testes {
     use super::*;
+
+    #[test]
+    fn prepara_pastas_de_conteudo_preservando_arquivos_e_recusando_categorias_invalidas() {
+        let raiz =
+            std::env::temp_dir().join(format!("dome-pastas-conteudo-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(raiz.join("mods")).unwrap();
+        let _limpeza = crate::comandos::social_launcher::pacotes_sociais::PastaTemporaria::nova(
+            raiz.parent().unwrap(),
+            &raiz,
+        )
+        .unwrap();
+        std::fs::write(raiz.join("mods/existente.jar"), b"preservado").unwrap();
+        for (categoria, pasta) in [
+            ("mods", "mods"),
+            ("resourcepacks", "resourcepacks"),
+            ("shaders", "shaderpacks"),
+        ] {
+            let destino = preparar_pasta_conteudo_instancia(&raiz, categoria).unwrap();
+            assert_eq!(destino, raiz.join(pasta).canonicalize().unwrap());
+            assert!(destino.is_dir());
+        }
+        assert_eq!(
+            std::fs::read(raiz.join("mods/existente.jar")).unwrap(),
+            b"preservado"
+        );
+        for categoria in ["../fora", "C:/Windows", "saves", ""] {
+            assert!(preparar_pasta_conteudo_instancia(&raiz, categoria).is_err());
+        }
+        assert!(!raiz.join("saves").exists());
+    }
 
     #[test]
     fn nome_personalizado_persiste_apos_renomear_pasta_externamente() {

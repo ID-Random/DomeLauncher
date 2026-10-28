@@ -275,6 +275,27 @@ try {
     });
     await recentes.getByText("Servidor teste", { exact: true }).waitFor();
     assert.equal(await recentes.getByText("Mundo teste", { exact: true }).count(), 1);
+    await pagina.getByRole("heading", { name: "Instância teste", exact: true }).click();
+    const barraJogar = pagina.locator("footer").filter({ has: pagina.getByRole("button", { name: /^(LOGIN|JOGAR)$/ }) });
+    await barraJogar.waitFor();
+    await barraJogar.getByRole("button").hover();
+    const areas = await barraJogar.evaluate((barra) => {
+        const botao = barra.querySelector('button');
+        const retangulo = barra.getBoundingClientRect();
+        const acao = botao.getBoundingClientRect();
+        const informacoes = barra.querySelector('p').getBoundingClientRect();
+        const pontos = [
+            [retangulo.left + 2, retangulo.bottom - 2],
+            [retangulo.right - 2, retangulo.bottom - 2],
+            [informacoes.left + 2, informacoes.top + 2],
+        ];
+        return {
+            fora: pontos.map(([x, y]) => barra.contains(document.elementFromPoint(x, y))),
+            botao: botao.contains(document.elementFromPoint(acao.left + acao.width / 2, acao.top + acao.height / 2)),
+        };
+    });
+    assert.deepEqual(areas.fora, [false, false, false], 'Laterais, faixa inferior e texto não interceptam o mouse.');
+    assert.equal(areas.botao, true, 'O botão continua interativo.');
     assert.deepEqual(erros, []);
     console.log("Início verificado no App: DOM preservado, atualização silenciosa, dados novos/editados/removidos, " +
         "retorno ao foco/visibilidade, falhas parciais/totais, respostas atrasadas, ocultação sem releitura " +

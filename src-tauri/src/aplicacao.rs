@@ -18,6 +18,7 @@ mod indice_mods_crash;
 mod instancias_basicas;
 mod instancias_criacao;
 mod lancamento_jogo;
+mod migracao_instancias;
 mod mods_conteudo;
 pub(crate) mod nomes_instancias;
 mod origem_crash;

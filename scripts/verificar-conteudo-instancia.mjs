@@ -38,13 +38,63 @@ try {
     const erros = [];
     pagina.on('pageerror', (erro) => erros.push(erro.message));
     await pagina.route('https://api.modrinth.com/v2/project/*/version?*', (rota) => rota.fulfill({
-        json: [{ id: 'ultima', version_number: '4.0', game_versions: ['1.21.1'], loaders: [],
-            files: [{ url: 'https://example.com/pacote.jar', filename: 'pacote.jar' }] }],
+        json: [{ id: 'mc-incompativel', version_number: 'Outro Minecraft', game_versions: ['1.20.1'], loaders: ['fabric'],
+            files: [{ url: 'https://example.com/antigo.jar', filename: 'antigo.jar' }] },
+            { id: 'loader-incompativel', version_number: 'Outro loader', game_versions: ['1.21.1'], loaders: ['forge'],
+                files: [{ url: 'https://example.com/forge.jar', filename: 'forge.jar' }] },
+            { id: 'ultima', version_number: '4.0', game_versions: ['1.21.1'], loaders: ['fabric'],
+            files: [{ url: 'https://example.com/pacote.jar', filename: 'pacote.jar' }] },
+            ...[['Beta', '1.10'], ['Alfa', '1.2'], ['Textura', '2.0']].map(([nome, numero]) => ({
+                id: nome, version_number: numero, game_versions: ['1.21.1'], loaders: [],
+                files: [{ url: 'https://example.com/pacote.zip',
+                    filename: `${nome}.${nome === 'Textura' ? 'zip' : 'jar'}` }],
+                changelog: `# Notas ${nome}\n\nFinal das notas`,
+            }))],
+    }));
+    await pagina.route('https://api.modrinth.com/v2/version/*', (rota) => rota.fulfill({
+        json: { changelog: '# Notas da versão\n\nFinal das notas' },
     }));
     await pagina.goto(urlBase, { waitUntil: 'domcontentloaded' });
     await pagina.getByRole('button', { name: 'Alfa', exact: true }).waitFor();
     const nomes = () => pagina.locator('#lista-conteudo-instancia .group > .min-w-0 > button').allTextContents();
     assert.deepEqual(await nomes(), ['Alfa', 'Beta']);
+    const leiturasConteudo = () => pagina.evaluate(() => window.chamadas.filter((item) =>
+        item.comando === 'obter_conteudo_instalado_detalhado').map((item) => item.argumentos.contentType));
+    await pagina.evaluate(() => { document.documentElement.dataset.pausarConteudo = 'resourcepacks'; });
+    await pagina.getByRole('button', { name: 'Resource Packs', exact: true }).click();
+    await pagina.waitForFunction(() => window.chamadas.some((item) =>
+        item.comando === 'obter_conteudo_instalado_detalhado' && item.argumentos.contentType === 'resourcepacks'));
+    await pagina.getByRole('button', { name: 'Mods', exact: true }).click();
+    await pagina.getByRole('button', { name: 'Alfa', exact: true }).waitFor();
+    await pagina.getByRole('button', { name: 'Resource Packs', exact: true }).click();
+    assert.deepEqual(await leiturasConteudo(), ['mods', 'resourcepacks'], 'Reabrir não duplica a carga pendente.');
+    await pagina.evaluate(() => window.liberarConteudo('resourcepacks'));
+    await pagina.getByRole('button', { name: 'Textura', exact: true }).waitFor();
+    await pagina.getByRole('button', { name: 'Shaders', exact: true }).click();
+    await pagina.getByRole('button', { name: 'Shader', exact: true }).waitFor();
+    for (const rotulo of ['Mods', 'Resource Packs', 'Shaders', 'Mods']) {
+        await pagina.getByRole('button', { name: rotulo, exact: true }).click();
+    }
+    await pagina.getByRole('button', { name: 'Configuração', exact: true }).click();
+    await pagina.getByRole('button', { name: 'Conteúdo', exact: true }).click();
+    await pagina.getByRole('button', { name: 'Alfa', exact: true }).waitFor();
+    assert.deepEqual(await leiturasConteudo(), ['mods', 'resourcepacks', 'shaders'],
+        'Cada categoria é lida uma vez enquanto a instância está aberta.');
+    let aberturas = 0;
+    for (const [rotulo, categoria] of [['Mods', 'mods'], ['Resource Packs', 'resourcepacks'], ['Shaders', 'shaders']]) {
+        const aba = pagina.getByRole('button', { name: rotulo, exact: true });
+        await aba.click();
+        assert.equal(await pagina.evaluate(() => window.chamadas.filter((item) =>
+            item.comando === 'abrir_pasta_instancia').length), aberturas, 'Clique simples apenas seleciona a categoria.');
+        await aba.dblclick();
+        const chamadas = await pagina.evaluate(() => window.chamadas.filter((item) =>
+            item.comando === 'abrir_pasta_instancia'));
+        assert.equal(chamadas.length, ++aberturas, 'Cada duplo clique deve abrir uma pasta uma vez.');
+        assert.deepEqual(chamadas.at(-1).argumentos, { instanceId: 'teste', tipoConteudo: categoria });
+    }
+    await pagina.getByRole('button', { name: 'Mods', exact: true }).click();
+    assert.deepEqual(await leiturasConteudo(), ['mods', 'resourcepacks', 'shaders'],
+        'O duplo clique não deve reler as categorias já carregadas.');
     await pagina.getByRole('button', { name: /Ordenar por Nome/ }).click();
     assert.deepEqual(await nomes(), ['Beta', 'Alfa']);
     await pagina.evaluate(() => {
@@ -105,21 +155,87 @@ try {
     const botaoVersao = pagina.getByRole('button', { name: /Trocar versão de Beta/ });
     const botaoSemAtualizacao = pagina.getByRole('button', { name: /Trocar versão de Alfa/ });
     assert.equal(await pagina.getByRole('button', { name: 'Atualizar', exact: true }).count(), 0);
-    const corInicial = await botaoVersao.evaluate((botao) => getComputedStyle(botao).backgroundColor);
-    const corNeutra = await botaoSemAtualizacao.evaluate((botao) => getComputedStyle(botao).backgroundColor);
+    for (const botao of [botaoVersao, botaoSemAtualizacao]) {
+        const estilo = await botao.evaluate((elemento) => {
+            const estilo = getComputedStyle(elemento);
+            const versao = elemento.nextElementSibling;
+            const icone = elemento.getBoundingClientRect();
+            const numero = versao.getBoundingClientRect();
+            return { borda: estilo.borderRightWidth,
+                bordaVersao: getComputedStyle(versao).borderLeftWidth,
+                espaco: numero.left - icone.right, alturaIcone: icone.height, alturaVersao: numero.height };
+        });
+        assert.equal(estilo.borda, '1px', 'O ícone deve ter moldura própria.');
+        assert.equal(estilo.bordaVersao, '1px', 'A versão deve ter moldura própria.');
+        assert.ok(estilo.espaco > 0, 'As molduras devem ficar separadas.');
+        assert.equal(estilo.alturaIcone, estilo.alturaVersao, 'Os botões devem ter a mesma altura.');
+    }
+    const corInicial = await botaoVersao.evaluate((botao) => getComputedStyle(botao).color);
+    const corNeutra = await botaoSemAtualizacao.evaluate((botao) => getComputedStyle(botao).color);
     await pagina.evaluate(() => window.aplicarCorTeste('#EC4899'));
     await pagina.waitForFunction((corAnterior) => {
         const botao = document.querySelector('button[aria-label^="Trocar versão de Beta"]');
-        return botao && getComputedStyle(botao).backgroundColor !== corAnterior;
+        return botao && getComputedStyle(botao).color !== corAnterior;
     }, corInicial);
-    const corPersonalizada = await botaoVersao.evaluate((botao) => getComputedStyle(botao).backgroundColor);
+    const corPersonalizada = await botaoVersao.evaluate((botao) => getComputedStyle(botao).color);
     assert.notEqual(corInicial, corPersonalizada);
     assert.notEqual(corPersonalizada, corNeutra);
-    assert.equal(await botaoSemAtualizacao.evaluate((botao) => getComputedStyle(botao).backgroundColor), corNeutra);
+    assert.equal(await botaoSemAtualizacao.evaluate((botao) => getComputedStyle(botao).color), corNeutra);
     await botaoVersao.click();
     await pagina.getByRole('dialog', { name: 'Trocar versão de Beta', exact: true }).waitFor();
     await pagina.getByText('4.0', { exact: true }).waitFor();
-    await pagina.getByRole('button', { name: 'Fechar', exact: true }).click();
+    assert.equal(await pagina.getByText('Outro Minecraft', { exact: true }).count(), 0);
+    assert.equal(await pagina.getByText('Outro loader', { exact: true }).count(), 0);
+    const abaChangelog = pagina.getByRole('button', { name: 'Changelog', exact: true });
+    assert.equal(await abaChangelog.isVisible(), true, 'Changelog deve estar disponível ao abrir a troca de versão.');
+    assert.equal(await pagina.getByText('O arquivo atual só é removido após a nova versão ser instalada.',
+        { exact: true }).count(), 0);
+    assert.equal(await pagina.getByText(/Somente versões compatíveis com Minecraft/).count(), 0);
+    await abaChangelog.click();
+    await pagina.getByRole('region', { name: 'Changelog da versão 1.10', exact: true })
+        .getByText('Final das notas', { exact: true }).waitFor();
+    await pagina.getByRole('button', { name: 'Versões', exact: true }).click();
+    await pagina.locator('input[name="versao-conteudo"][value="ultima"]').check();
+    await abaChangelog.click();
+    await pagina.getByRole('region', { name: 'Changelog da versão 4.0', exact: true })
+        .getByText('Final das notas', { exact: true }).waitFor();
+    await pagina.getByRole('button', { name: 'Versões', exact: true }).click();
+    await pagina.locator('input[name="versao-conteudo"][value="Beta"]').check();
+    const trocarMod = pagina.getByRole('button', { name: 'Trocar versão', exact: true });
+    assert.ok(await trocarMod.evaluate((botao) => {
+        const acao = botao.getBoundingClientRect();
+        const dialogo = botao.closest('[role="dialog"]').getBoundingClientRect();
+        return Math.abs(acao.left + acao.width / 2 - dialogo.left - dialogo.width / 2) < 1;
+    }), 'O botão de trocar versão do conteúdo deve ficar no centro do modal.');
+    const selecaoAntes = await pagina.locator('input[name="versao-conteudo"]:checked').inputValue();
+    await pagina.getByRole('button', { name: 'Ver changelog da versão 4.0', exact: true }).click();
+    await pagina.getByText('Final das notas', { exact: true }).waitFor();
+    assert.equal(await pagina.getByRole('button', { name: 'Trocar versão', exact: true }).count(), 0);
+    await pagina.getByRole('button', { name: 'Versões', exact: true }).click();
+    assert.equal(await pagina.locator('input[name="versao-conteudo"]:checked').inputValue(), selecaoAntes);
+    await abaChangelog.click();
+    await pagina.getByRole('region', { name: 'Changelog da versão 1.10', exact: true })
+        .getByText('Final das notas', { exact: true }).waitFor();
+    await pagina.getByRole('button', { name: 'Versões', exact: true }).click();
+    await pagina.locator('input[name="versao-conteudo"][value="ultima"]').check();
+    await pagina.evaluate(() => { document.documentElement.dataset.falharInstalacao = 'sim'; });
+    await trocarMod.click();
+    await pagina.getByText('Falha simulada no download', { exact: true }).waitFor();
+    assert.equal(await pagina.evaluate(() => window.chamadas.filter((c) => c.comando === 'remove_project_file').length), 0,
+        'Falha na instalação não pode remover o arquivo anterior.');
+    await pagina.evaluate(() => { delete document.documentElement.dataset.falharInstalacao; });
+    await pagina.evaluate(() => { document.documentElement.dataset.pausarInstalacao = 'sim'; });
+    await trocarMod.click();
+    await pagina.getByRole('button', { name: 'Trocando versão… 30%', exact: true }).waitFor();
+    assert.equal(await pagina.evaluate(() => window.chamadas.filter((c) => c.comando === 'remove_project_file').length), 0);
+    await pagina.evaluate(() => { delete document.documentElement.dataset.pausarInstalacao; window.liberarInstalacao(); });
+    await pagina.getByRole('dialog', { name: 'Trocar versão de Beta', exact: true }).waitFor({ state: 'hidden' });
+    const remocao = await pagina.evaluate(() => window.chamadas.find((c) => c.comando === 'remove_project_file'));
+    assert.equal(remocao.argumentos.fileName, 'Beta.jar');
+    await pagina.getByRole('button', { name: 'Mundos', exact: true }).click();
+    await pagina.getByText('4,02 KiB', { exact: true }).waitFor();
+    assert.equal(await pagina.getByText('4,02 KiB', { exact: true }).getAttribute('title'), '4.113 bytes');
+    await pagina.getByRole('button', { name: 'Conteúdo', exact: true }).click();
     await pagina.getByRole('button', { name: /Ordenar por Ativo/ }).click();
     assert.deepEqual(await nomes(), ['Beta', 'Alfa']);
     await pagina.getByRole('button', { name: /Ordenar por Ativo/ }).click();
@@ -137,8 +253,25 @@ try {
             assert.match(await versao.getAttribute('aria-label'), /Atualização disponível/);
             await versao.click();
             await pagina.getByText('4.0', { exact: true }).waitFor();
+            await abaChangelog.click();
+            await pagina.getByRole('region', {
+                name: `Changelog da versão ${tipo === 'resourcepacks' ? '2.0' : '3.0'}`, exact: true,
+            }).getByText('Final das notas', { exact: true }).waitFor();
+            await pagina.getByRole('button', { name: 'Versões', exact: true }).click();
+            await pagina.locator('input[name="versao-conteudo"][value="ultima"]').check();
+            await abaChangelog.click();
+            await pagina.getByRole('region', { name: 'Changelog da versão 4.0', exact: true })
+                .getByText('Final das notas', { exact: true }).waitFor();
             await pagina.getByRole('button', { name: 'Fechar', exact: true }).click();
         }
+        const nome = tipo === 'mods' ? 'Beta' : tipo === 'resourcepacks' ? 'Textura' : 'Shader';
+        const leiturasAntesDaImportacao = (await leiturasConteudo()).filter((categoria) => categoria === tipo).length;
+        await pagina.getByRole('button', { name: new RegExp(`^Changelog de ${nome}, versão`) }).click();
+        const regiaoNotas = pagina.getByRole('region', { name: new RegExp('^Changelog da versão') });
+        await regiaoNotas.getByText('Final das notas', { exact: true }).waitFor();
+        const atual = tipo === 'mods' ? '4.0' : tipo === 'resourcepacks' ? '2.0' : '3.0';
+        await regiaoNotas.getByRole('heading', { name: atual, exact: true }).waitFor();
+        await pagina.getByRole('button', { name: 'Fechar', exact: true }).click();
         await pagina.evaluate(() => {
             const area = document.querySelector('#lista-conteudo-instancia').getBoundingClientRect();
             const position = { x: (area.left + 80) * devicePixelRatio, y: (area.top + 50) * devicePixelRatio };
@@ -152,6 +285,8 @@ try {
             } });
         });
         await pagina.getByRole('button', { name: `Externo ${tipo}`, exact: true }).waitFor();
+        assert.equal((await leiturasConteudo()).filter((categoria) => categoria === tipo).length,
+            leiturasAntesDaImportacao + 1, 'Importar atualiza a categoria mesmo quando já estava carregada.');
         const chamada = await pagina.evaluate(() => window.chamadas.filter((item) =>
             item.comando === 'importar_conteudo_local').at(-1));
         assert.equal(chamada.argumentos.contentType, tipo);
@@ -229,6 +364,7 @@ try {
     };
     for (const [nome, minimo, maximo] of [
         ['Distância de renderização', 2, 64], ['Limite de FPS', 0, 260],
+        ['Escala da interface', 0, 3],
     ]) {
         const seletor = pagina.getByRole('combobox', { name: nome, exact: true });
         const valoresEsperados = ['', ...Array.from({ length: maximo - minimo + 1 },
@@ -244,6 +380,13 @@ try {
     }
     assert.equal(await pagina.getByRole('combobox', { name: 'Limite de FPS', exact: true })
         .locator('option:checked').textContent(), 'Ilimitado');
+    const escalaInterface = pagina.getByRole('combobox', { name: 'Escala da interface', exact: true });
+    assert.equal(await escalaInterface.locator('option[value="0"]').textContent(), '0 — Automática');
+    await rolarOpcao('Escala da interface', 100, '2');
+    await rolarOpcao('Escala da interface', -100, '3');
+    await pagina.mouse.wheel(0, -100);
+    await pagina.waitForTimeout(80);
+    assert.equal(await escalaInterface.inputValue(), '3');
     for (const nome of ['Brilho', 'Volume geral', 'Música']) {
         const campo = pagina.getByLabel(nome, { exact: true });
         await campo.fill('');
@@ -274,13 +417,14 @@ try {
     const salvamento = await pagina.evaluate(() => window.chamadas.filter((item) =>
         item.comando === 'salvar_configuracoes_jogo').at(-1));
     assert.deepEqual(salvamento.argumentos.alteracoes, {
-        renderDistance: '64', maxFps: '260', fov: '0.5', gamma: '0.75',
+        renderDistance: '64', maxFps: '260', guiScale: '3', fov: '0.5', gamma: '0.75',
     });
     await pagina.getByRole('button', { name: 'Conteúdo', exact: true }).click();
     await pagina.getByRole('button', { name: 'Configuração', exact: true }).click();
     await opcoesMinecraft.click();
     assert.equal(await pagina.getByLabel('Campo de visão', { exact: true }).inputValue(), '90');
     await pagina.getByLabel('Brilho', { exact: true }).fill('0');
+    assert.equal(await escalaInterface.inputValue(), '3');
     await rolarOpcao('Brilho', 100, '');
     await pagina.getByRole('button', { name: 'Salvar opções', exact: true }).click();
     await pagina.getByText('Opções salvas.', { exact: true }).waitFor();
@@ -388,8 +532,58 @@ try {
     await conferirCatalogo();
     await pagina.getByRole('button', { name: 'Início de teste', exact: true }).click();
     assert.equal(await avancar.isEnabled(), false, 'Uma nova navegação deve limpar o histórico de avanço.');
+    await pagina.goto(`${urlBase}?fila`, { waitUntil: 'domcontentloaded' });
+    await pagina.getByRole('button', { name: 'Adicionar conteúdo', exact: true }).click();
+    await pagina.getByRole('button', { name: 'Mods', exact: true }).click();
+    for (const nome of ['The Fenestra Tapes', 'Mod A', 'Mod B', 'Mod C']) {
+        await pagina.getByRole('button', { name: `Marcar ${nome} para instalar depois`, exact: true }).click();
+    }
+    await pagina.getByRole('button', { name: 'Revisar e confirmar', exact: true }).click();
+    const revisao = pagina.getByRole('dialog', { name: 'Revise e confirme' });
+    await revisao.getByText('The Fenestra Tapes', { exact: true }).waitFor();
+    const avisoFenestra = revisao.getByRole('region', { name: 'Conteúdos pendentes' }).locator('article').filter({
+        has: pagina.getByText('The Fenestra Tapes', { exact: true }),
+    });
+    assert.equal(await avisoFenestra.locator('p').nth(1).textContent(),
+        'O CurseForge não disponibiliza download para terceiros. '
+        + 'Baixe este mod no próprio CurseForge e importe para a instância.',
+        'O motivo não deve repetir o nome que já aparece no título.');
+    assert.equal(await revisao.getByRole('button', { name: 'Baixar', exact: true }).isEnabled(), true,
+        'Uma restrição de download não pode bloquear os outros projetos.');
+    assert.equal(await revisao.evaluate((elemento) => elemento.scrollWidth <= elemento.clientWidth), true);
+    await pagina.evaluate(() => { document.documentElement.dataset.falharArquivo = 'b.jar'; });
+    await revisao.getByRole('button', { name: 'Baixar', exact: true }).click();
+    await revisao.getByRole('region', { name: 'Conteúdos pendentes' }).getByText('Mod B', { exact: true }).waitFor();
+    const instaladosNaFila = () => pagina.evaluate(() => window.chamadas.filter((chamada) =>
+        chamada.comando === 'install_project_file').map((chamada) => chamada.argumentos.fileName));
+    assert.deepEqual(await instaladosNaFila(), ['a.jar', 'b.jar', 'c.jar'],
+        'A falha de B não impede o download de C.');
+    await revisao.getByRole('button', { name: 'Voltar', exact: true }).click();
+    for (const nome of ['Mod A', 'Mod C']) {
+        assert.equal(await pagina.getByRole('button', {
+            name: `Marcar ${nome} para instalar depois`, exact: true,
+        }).count(), 1, 'Somente os projetos concluídos saem da fila.');
+    }
+    for (const nome of ['The Fenestra Tapes', 'Mod B']) {
+        assert.equal(await pagina.getByRole('button', {
+            name: `Desmarcar ${nome} para instalar depois`, exact: true,
+        }).count(), 1, 'Os projetos com falha ficam selecionados para nova tentativa.');
+    }
+    await pagina.evaluate(() => { delete document.documentElement.dataset.falharArquivo; });
+    await pagina.getByRole('button', { name: 'Revisar e confirmar', exact: true }).click();
+    await revisao.getByRole('button', { name: 'Baixar', exact: true }).click();
+    await revisao.getByRole('button', { name: 'Voltar', exact: true }).waitFor();
+    await pagina.waitForFunction(() => window.chamadas.filter((chamada) =>
+        chamada.comando === 'install_project_file').length === 4);
+    await revisao.getByRole('button', { name: 'Voltar', exact: true }).click();
+    await pagina.getByRole('button', { name: 'Revisar e confirmar', exact: true }).click();
+    await revisao.getByText('The Fenestra Tapes', { exact: true }).waitFor();
+    assert.equal(await revisao.getByRole('button', { name: 'Baixar', exact: true }).isEnabled(), false,
+        'Quando só resta um projeto sem download, não existe instalação para iniciar.');
+    assert.deepEqual(await instaladosNaFila(), ['a.jar', 'b.jar', 'c.jar', 'b.jar']);
+    console.log('Fila validada: restrição na preparação, falha no download, continuação dos demais e nova tentativa apenas dos pendentes.');
     assert.deepEqual(erros, []);
-    console.log('Interface validada em 960×640 e escala 150%: ordenação, versão, catálogo por clique/teclado nas duas fontes/três tipos, seleção, importação, opções, Vanilla e histórico com busca, filtros e rolagem entre projetos, telas e instâncias. IPC simulado.');
+    console.log('Interface validada em 960×640 e escala 150%: reutilização das três categorias, carga pendente sem duplicação, atualização após importação, ordenação, versão, catálogo, seleção, opções, Vanilla e histórico entre projetos, telas e instâncias. IPC simulado.');
 } finally {
     await navegador?.close();
     if (servidor) await new Promise((resolver) => servidor.close(resolver));

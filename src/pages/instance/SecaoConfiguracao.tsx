@@ -6,9 +6,10 @@ interface SecaoConfiguracaoProps {
     titulo: string;
     icone?: ReactNode;
     children: ReactNode;
+    onAbrir?: () => void;
 }
 
-export default function SecaoConfiguracao({ titulo, icone, children }: SecaoConfiguracaoProps) {
+export default function SecaoConfiguracao({ titulo, icone, children, onAbrir }: SecaoConfiguracaoProps) {
     const [aberta, setAberta] = useState(false);
     const id = useId();
 
@@ -20,7 +21,10 @@ export default function SecaoConfiguracao({ titulo, icone, children }: SecaoConf
                     type="button"
                     aria-expanded={aberta}
                     aria-controls={`${id}-conteudo`}
-                    onClick={() => setAberta((anterior) => !anterior)}
+                    onClick={() => {
+                        if (!aberta) onAbrir?.();
+                        setAberta((anterior) => !anterior);
+                    }}
                     className="flex w-full items-center gap-3 px-5 py-4 text-left transition-colors
                         hover:bg-white/[0.025] focus-visible:outline-2 focus-visible:-outline-offset-2
                         focus-visible:outline-emerald-400/60"

@@ -32,7 +32,7 @@ fn limites_opcao(chave: &str) -> Option<(f64, f64, bool)> {
     Some(match chave {
         "renderDistance" => (2.0, 64.0, true),
         "maxFps" => (0.0, 260.0, true),
-        "guiScale" => (0.0, 16.0, true),
+        "guiScale" => (0.0, 3.0, true),
         "fov" => (-1.0, 1.0, false),
         "gamma"
         | "mouseSensitivity"
@@ -150,6 +150,21 @@ pub(crate) async fn salvar_configuracoes_jogo(
 #[cfg(test)]
 mod testes {
     use super::*;
+
+    #[test]
+    fn escala_interface_aceita_automatico_ate_tres() {
+        for valor in ["0", "1", "2", "3"] {
+            let alteracoes = BTreeMap::from([("guiScale".into(), valor.into())]);
+            assert_eq!(
+                extrair_opcoes(&aplicar_opcoes("", &alteracoes).unwrap()),
+                alteracoes
+            );
+        }
+        for valor in ["-1", "4", "2.5"] {
+            let alteracoes = BTreeMap::from([("guiScale".into(), valor.into())]);
+            assert!(aplicar_opcoes("", &alteracoes).is_err());
+        }
+    }
 
     #[test]
     fn restaura_padrao_sem_apagar_opcoes_desconhecidas() {

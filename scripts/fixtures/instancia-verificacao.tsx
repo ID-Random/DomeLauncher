@@ -7,12 +7,17 @@ import type { ProjetoConteudo } from "../../src/components/ProjetoDetalheModal";
 import { useHistoricoNavegacao } from "../../src/hooks/useHistoricoNavegacao";
 import { solicitarNavegacaoInterna } from "../../src/lib/navegacaoInterna";
 import { aplicarCorDestaque } from "../../src/lib/corDestaque";
+import { getCreatingInstances } from "../../src/stores/creatingInstances";
 import "../../src/index.css";
 
 const callbacks = new Map<number, (evento: unknown) => void>();
 const listeners = new Map<string, number>();
 const chamadas: Array<{ comando: string; argumentos: Record<string, unknown> }> = [];
+const cargasPausadas = new Map<string, () => void>();
 let proximoCallback = 0;
+let versaoAmbiente = "1.21.1";
+let loaderAmbiente = new URLSearchParams(location.search).has("vanilla") ? "Vanilla" : "Fabric";
+let versaoLoaderAmbiente = "0.16.10";
 let opcoes = { renderDistance: "12", fov: "0", gamma: "0.5", fullscreen: "false" };
 const criarItem = (nome: string, versao: string, ativo: boolean, extensao: string) => ({
     name: nome, fileName: `${nome}.${extensao}${ativo ? "" : ".disabled"}`, version: versao,
@@ -28,7 +33,8 @@ for (const [filtro, itens] of Object.entries(listas)) {
     const tipo = filtro === "mods" ? "mod" : filtro === "shaders" ? "shader" : "resourcepack";
     for (const item of itens) cache[`teste::${tipo}::${item.fileName.toLowerCase()}`] = {
         name: item.name, author: item.author, projectId: item.name,
-        source: filtro === "shaders" ? "curseforge" : "modrinth", projectType: tipo,
+        source: new URLSearchParams(location.search).get("fonte")
+            || (filtro === "shaders" ? "curseforge" : "modrinth"), projectType: tipo,
         atualizadoEm: Date.now(), atualizacaoVerificadaEm: Date.now(),
         updateAvailable: item.name !== "Alfa", latestVersion: "4.0",
     };
@@ -47,17 +53,96 @@ Object.defineProperty(window, "__TAURI_INTERNALS__", { value: {
     },
     invoke: async (comando: string, argumentos: Record<string, unknown> = {}) => {
         chamadas.push({ comando, argumentos });
+        if (comando === "get_worlds") return [{
+            name: "Mundo real", path: "D:/teste/saves/mundo", sizeOnDisk: "4,02 KiB", sizeBytes: 4113,
+            gameMode: "Survival", difficulty: "Normal", lastPlayed: "Recentemente",
+        }];
+        if (comando === "install_mod" || comando === "install_project_file") {
+            if (document.documentElement.dataset.falharArquivo
+                && argumentos.fileName === document.documentElement.dataset.falharArquivo) {
+                throw new Error("Falha simulada no download deste arquivo");
+            }
+            if (document.documentElement.dataset.falharInstalacao === "sim") throw new Error("Falha simulada no download");
+            const progresso = argumentos.progresso as { onmessage?: (dados: object) => void } | undefined;
+            progresso?.onmessage?.({ porcentagem: 34, etapa: "Baixando conteúdo" });
+            if (document.documentElement.dataset.pausarInstalacao === "sim") {
+                await new Promise<void>((resolver) => Object.assign(window, { liberarInstalacao: resolver }));
+            }
+            progresso?.onmessage?.({ porcentagem: 100, etapa: "Conteúdo instalado" });
+            const mod = argumentos.modInfo as { file_name?: string; name?: string; version?: string } | undefined;
+            const instalado = listas.mods.find((item) => item.name === mod?.name);
+            if (instalado && mod?.file_name) {
+                instalado.fileName = mod.file_name;
+                instalado.version = mod.version ?? instalado.version;
+            }
+            return mod?.file_name || String(argumentos.fileName || "pacote.jar");
+        }
         if (comando === "plugin:event|listen") {
             listeners.set(String(argumentos.event), Number(argumentos.handler));
             return argumentos.handler;
         }
         if (comando === "plugin:event|unlisten") return;
         if (comando === "get_instance_details") return {
-            id: argumentos.instanceId, name: `Instância ${argumentos.instanceId}`, version: "1.21.1", mcType: "fabric",
-            loaderType: new URLSearchParams(location.search).has("vanilla") ? "Vanilla" : "Fabric",
+            id: argumentos.instanceId, name: `Instância ${argumentos.instanceId}`, version: versaoAmbiente,
+            mcType: loaderAmbiente === "Vanilla" ? "Vanilla" : "Modded",
+            loaderType: loaderAmbiente, loaderVersion: versaoLoaderAmbiente,
             path: "D:/teste", created: "2026-10-19", memory: 4096,
         };
-        if (comando === "obter_conteudo_instalado_detalhado") return [...listas[String(argumentos.contentType)]];
+        if (comando === "get_modpack_info" && new URLSearchParams(location.search).has("modpack")) return {
+            projectId: "123", source: new URLSearchParams(location.search).get("modpack"),
+            name: "Pacote de teste", author: "Autor", versionId: "v1", installedVersion: "1.0",
+        };
+        if (comando === "get_minecraft_versions") return { versions: [
+            { id: "1.21.1", type: "release" }, { id: "1.20.1", type: "release" },
+            { id: "26w01a", type: "snapshot" },
+        ] };
+        if (comando === "get_loader_versions") {
+            if (document.documentElement.dataset.falharLoader === "sim") throw "Falha ao consultar loader";
+            return { versions: argumentos.loaderType === "fabric" ? [
+                { version: "99.0-beta", stable: false }, { version: "0.17.0", stable: true },
+                ...(argumentos.minecraftVersion === "1.21.1" ? [{ version: "0.16.10", stable: true }] : []),
+            ] : [{ version: "47.4.10", stable: true }] };
+        }
+        if (comando === "migrar_versao_instancia") {
+            if (document.documentElement.dataset.falharMigracao === "sim") throw "Falha de rede; instância preservada";
+            versaoAmbiente = String(argumentos.version);
+            loaderAmbiente = String(argumentos.loaderType);
+            versaoLoaderAmbiente = String(argumentos.loaderVersion || "");
+            listas.mods = [criarItem("Atualizado", "2.0", true, "jar"), criarItem("Incompatível", "1.0", false, "jar")];
+            return { versaoAnterior: "1.21.1", versaoNova: versaoAmbiente, modsMigrados: 1,
+                modsDesativados: ["Incompatível.jar.disabled"], caminhoBackup: "D:/teste/backup" };
+        }
+        if (comando === "obter_conteudo_instalado_detalhado") {
+            const tipo = String(argumentos.contentType);
+            if (document.documentElement.dataset.pausarConteudo === tipo) {
+                await new Promise<void>((resolver) => cargasPausadas.set(tipo, resolver));
+            }
+            return [...listas[tipo]];
+        }
+        if (comando === "planejar_instalacao_conteudo") {
+            const itens = argumentos.itens as Array<{ id: string; nome: string; plataforma: string }>;
+            const bloqueados = itens.filter((item) => item.id === "1347822");
+            return {
+                itens: itens.filter((item) => item.id !== "1347822").map((item) => ({
+                    chave: `${item.plataforma}:project:${item.id}`, projectId: item.id, nome: item.nome,
+                    nomeArquivo: `${item.id}.jar`, downloadUrl: `https://example.com/${item.id}.jar`,
+                    plataforma: item.plataforma, tipoProjeto: "mod", versao: "1", tipoVersao: "release",
+                    selecionado: true, requeridoPor: [], selecoes: [`${item.plataforma}:project:${item.id}`],
+                })),
+                falhas: bloqueados.map((item) => ({
+                    chave: `${item.plataforma}:project:${item.id}`, nome: item.nome,
+                    motivo: `${item.nome}: O CurseForge não disponibiliza download para terceiros. `
+                        + "Baixe este mod no próprio CurseForge e importe para a instância.",
+                })),
+            };
+        }
+        if (comando === "search_mods_online" && new URLSearchParams(location.search).has("fila")) {
+            return argumentos.platform !== "curseforge" ? [] : [
+                ["1347822", "The Fenestra Tapes"], ["a", "Mod A"], ["b", "Mod B"], ["c", "Mod C"],
+            ].map(([id, title]) => ({
+                id, title, slug: id, author: "Autor", description: "", platform: "curseforge", project_type: "mod",
+            }));
+        }
         if (comando === "search_mods_online") return Array.from({
             length: new URLSearchParams(location.search).has("navegacao") ? 12 : 1,
         }, (_, indice) => ({
@@ -74,11 +159,26 @@ Object.defineProperty(window, "__TAURI_INTERNALS__", { value: {
             ] : [];
         }
         if (comando === "get_project_versions") return [];
+        if (comando === "obter_changelog_versao_curseforge") return `<h2>Notas ${argumentos.fileId}</h2><p>Final das notas</p>`;
+        if (comando === "listar_versoes_projeto_curseforge" && new URLSearchParams(location.search).has("paginacao")) {
+            return Array.from({ length: 37 }, (_, indice) => ({
+                id: `pagina-${indice}`, version_number: indice === 25 ? "1.10" : `${37 - indice}.0`,
+                game_versions: ["1.21.1"], loaders: ["fabric"],
+                files: [{ url: "https://example.com/mod.jar", filename: indice === 25 ? "Beta.jar" : `mod-${indice}.jar` }],
+            }));
+        }
         if (comando === "listar_versoes_projeto_curseforge") return [{
             id: "ultima", version_number: "4.0", game_versions: ["1.21.1"], loaders: [],
             files: [{ url: "https://example.com/pacote.zip", filename: "pacote.zip" }],
+        }, {
+            id: "instalada", version_number: "3.0", game_versions: ["1.21.1"], loaders: [],
+            files: [{ url: "https://example.com/Shader.zip", filename: "Shader.zip" }],
+        }, {
+            id: "mc-incompativel", version_number: "Outro Minecraft", game_versions: ["1.20.1"], loaders: ["fabric"],
+            files: [{ url: "https://example.com/antigo.zip", filename: "antigo.zip" }],
         }];
-        if (comando === "get_settings") return { ram_mb: 4096, java_args: "" };
+        if (comando === "get_settings") return { ram_mb: 4096, java_args: "",
+            show_snapshots: new URLSearchParams(location.search).has("snapshots") };
         if (comando === "get_system_ram") return 16384;
         if (comando === "obter_configuracoes_jogo") return opcoes;
         if (comando === "salvar_configuracoes_jogo") {
@@ -99,6 +199,12 @@ Object.defineProperty(window, "__TAURI_INTERNALS__", { value: {
 } });
 Object.assign(window, {
     chamadas,
+    tarefasCriacao: getCreatingInstances,
+    liberarConteudo: (tipo: string) => {
+        delete document.documentElement.dataset.pausarConteudo;
+        cargasPausadas.get(tipo)?.();
+        cargasPausadas.delete(tipo);
+    },
     aplicarCorTeste: aplicarCorDestaque,
     emitirArraste: (evento: string, payload: unknown) => {
         const callback = callbacks.get(listeners.get(`tauri://${evento}`)!);

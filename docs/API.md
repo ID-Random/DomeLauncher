@@ -137,15 +137,33 @@ Falhas ao recarregar análises preservam a lista exibida; navegar para outro per
 Análises só existem para instâncias com `modpack.json` do Modrinth/CurseForge; instâncias personalizadas
 não oferecem publicação, e a API rejeita qualquer `source` diferente desses dois.
 
-`migrar_versao_instancia` atende somente instâncias personalizadas. O comando prepara uma cópia completa,
-baixa a nova base e o loader e identifica mods pelo SHA-512 no Modrinth e pelo fingerprint no CurseForge. Mods
-reconhecidos são substituídos por versões compatíveis e suas dependências obrigatórias; arquivos não reconhecidos,
-incompatíveis ou desativados
-permanecem no backup. Mundos, opções, configurações, resource packs e shaders são copiados sem alteração. A troca
-das pastas só ocorre depois da preparação e tenta restaurar a instância anterior se a ativação falhar.
-O modal fecha após iniciar a operação, que continua no indicador global da biblioteca sem bloquear a navegação.
+`migrar_versao_instancia(instanceId, version, loaderType, loaderVersion?, progresso?)` atende instâncias
+personalizadas e modpacks instalados. A seção Versão e Loader reúne Minecraft, família e versão do loader
+em um formulário com um único botão Alterar. O fluxo prepara uma cópia completa e bloqueia a publicação
+enquanto o jogo estiver aberto.
+Os mods são identificados por SHA-512 no Modrinth e `file.fileFingerprint` no CurseForge. Para cada projeto,
+escolhe a publicação compatível mais recente do primeiro canal disponível: release, beta ou alpha.
+A seleção usa as datas de publicação e os canais documentados pelo
+[Modrinth](https://docs.modrinth.com/api/operations/getprojectversions/) e
+[CurseForge](https://docs.curseforge.com/rest-api/). CurseForge percorre as páginas e, se o filtro de loader não
+retornar candidato, tenta sem esse filtro e valida Minecraft e loader localmente. Dependências obrigatórias
+com versão fixa conservam essa restrição. Falhas de rede ou respostas inválidas interrompem a preparação;
+somente incompatibilidades confirmadas permitem continuar sem substituir o mod.
+
+Mods sem identificação ou versão compatível permanecem na pasta `mods` como `.jar.disabled`. Os mods já
+desativados mantêm esse estado após atualizar. Mundos, opções, configurações, texturas, shaders e vínculo com
+o projeto são preservados. O retorno acrescenta `modsDesativados` à estrutura com `modsMigrados`,
+`versaoAnterior`, `versaoNova`, `modsPreservadosBackup` e `caminhoBackup`.
+O backup completo permanece em `backups/instances`, inclusive com a pasta de instâncias em outra unidade.
+A ativação restaura a pasta anterior se a publicação falhar. A seção desativa os campos durante a aplicação;
+a operação continua no indicador global com percentual, sem bloquear a navegação. O modal da biblioteca
+reutiliza o mesmo formulário e fecha ao iniciar.
 
 ## Sincronização local entre instâncias
+
+`abrir_pasta_instancia(instanceId, tipoConteudo?)` abre a raiz do jogo da instância quando a categoria é omitida.
+As categorias `mods`, `resourcepacks` e `shaders` abrem `mods/`, `resourcepacks/` e `shaderpacks/` nessa raiz.
+Pastas ausentes são criadas; categorias desconhecidas e caminhos que escapem da instância são recusados.
 
 As configurações globais podem definir uma instância de origem e sincronizar seletivamente `config/`, `options.txt`,
 `resourcepacks/`, `shaderpacks/` e `servers.dat`. `aplicar_sincronizacao_instancias` replica os itens escolhidos para
@@ -572,7 +590,7 @@ Na atualização, a compatibilidade consulta todas as versões de Minecraft e lo
 Os nomes dos loaders são comparados sem distinguir maiúsculas de minúsculas, aceitando os rótulos locais
 `Fabric`, `Forge` e `NeoForge`. Mods locais adicionais não participam dessa verificação de compatibilidade.
 O vínculo público usa `modpack-dome.json`, separado de `compartilhamento.json`, e os metadados usam
-`modpack.json` com `source: dome`. A troca de versão exige jogo fechado, mesmo Minecraft/loader, aceite
+`modpack.json` com `source: dome`. A troca de versão exige jogo fechado, preparação do Minecraft/loader alvo, aceite
 explícito para arquivos locais conflitantes e backup em `.social-backups`. Mundos, opções, lista de servidores
 e conteúdo pessoal não gerenciado são preservados. Análises sociais da Dome ainda não estão habilitadas.
 
@@ -582,8 +600,42 @@ Isso não comprova login, upload S3 ou instalação de um pacote publicado entre
 
 ## Outros serviços e validação
 
+Changelogs são consultados por versão: o Modrinth fornece Markdown no campo `changelog` da listagem ou
+em `GET /v2/version/{id}`; a fonte Dome usa o `changelog` da versão publicada. Para CurseForge, o comando
+`obter_changelog_versao_curseforge(projectId, fileId)` valida IDs numéricos positivos e consulta
+`GET /v1/mods/{projectId}/files/{fileId}/changelog` com os cabeçalhos nativos existentes, retornando HTML.
+A interface renderiza Markdown/HTML com a sanitização da descrição, sem resumir ou truncar as notas.
+Erro de consulta e changelog vazio são estados distintos; o erro permite tentar novamente.
+
 Microsoft/Xbox/Minecraft, skins, manifests Mojang, loaders e conteúdo Modrinth/CurseForge têm integrações
 próprias, fora da DomeAPI. Consulte `auth*.rs`, `skin.rs` e módulos de `aplicacao/`.
+Na página de conteúdo CurseForge, a lista de instâncias consulta `listar_versoes_projeto_curseforge` por
+combinação de Minecraft e loader, com até quatro consultas simultâneas e reaproveitamento entre instâncias iguais.
+Texturas e shaders agrupam somente por Minecraft. A seleção reutiliza esses resultados; carregamento e falha de
+consulta permanecem distintos de incompatibilidade. A verificação considera os arquivos retornados pela listagem
+filtrada (até 50), sem avaliar conflitos entre mods ou suas dependências locais.
+Na lista de instâncias, a seleção usa o destaque verde original; as demais opções usam fundo neutro,
+com menor opacidade nas incompatíveis. Todas as Versões fica sempre acima da lista, sem depender da busca,
+consulta a listagem sem Minecraft/loader e desativa a instalação. Retornar a uma instância reaproveita a
+consulta filtrada. A listagem geral do CurseForge percorre as páginas até o total informado pela API
+(limite de 10.000 arquivos), incluindo versões sem download; consultas filtradas de conteúdo mantêm até 50.
+Versões com Minecraft/loader compatíveis e sem URL de download mantêm a instalação bloqueada;
+ausência de URL não é incompatibilidade de Minecraft/loader. Falhas de consulta mostram o erro.
+Na resolução de instalações individuais, em lote e na migração, arquivos sem `downloadUrl` também
+mantêm a compatibilidade. A seleção prioriza arquivos compatíveis com download disponível; se nenhum
+oferecer download, o erro identifica o projeto e orienta baixar pelo site do CurseForge e importar o arquivo.
+Isso pode ocorrer quando o autor desativa a distribuição para terceiros (`allowModDistribution: false`);
+o launcher não constrói URLs alternativas para contornar essa restrição.
+`planejar_instalacao_conteudo` retorna `{ itens, falhas }`: cada seleção e suas dependências são
+preparadas isoladamente. Uma falha descarta apenas essa seleção, sem acrescentar dependências incompletas
+ao plano. Cada arquivo informa `selecoes`, com as chaves dos projetos que precisam dele.
+A fila permite instalar os itens disponíveis e exibe os motivos dos pendentes. Durante o download,
+falhas deixam pendentes somente o projeto e os requerentes da dependência que falhou; os independentes
+continuam. Somente seleções concluídas saem da fila. Rever a fila consulta novamente os pendentes.
+`bun test scripts/tests/fila-instalacao.test.ts` e `bun run verificar:conteudo-instancia` cobrem
+continuação após falhas, dependências compartilhadas e nova tentativa, com IPC simulado na interface.
+O teste remoto opcional `cargo test --manifest-path src-tauri/Cargo.toml consulta_remota_fenestra_e_geckolib -- --ignored`
+confere listagem, resolução por projeto/arquivo e migração do Fenestra, além da resolução da GeckoLib para Forge 1.20.1.
 Versões exatas de arquivos CurseForge são resolvidas pelo comando
 `obter_versao_projeto_curseforge`; isso permite selecionar inclusive uma versão social que já saiu da primeira
 página da listagem. Instâncias de modpacks públicos são identificadas pelo `modpack.json`, com fonte, projeto,
@@ -591,10 +643,51 @@ versão e uma assinatura dos arquivos gerenciados. Alterações posteriores em m
 shaders ou scripts fazem a presença tratá-la como instância personalizada; instalações legadas sem assinatura
 continuam usando os metadados exatos até a próxima instalação ou troca de versão. A ausência do `modpack.json`
 mantém a instância como personalizada, sem inferência pelo nome.
-Ao trocar a versão de um modpack público, o launcher limita as opções à mesma versão do Minecraft e ao mesmo loader,
-substitui o conteúdo gerenciado do pacote e preserva dados da instância como mundos e opções do jogador.
+Na instância, a aba após Conteúdo usa a fonte do `modpack.json`: Curseforge, Modrinth ou Dome.
+Descrição, Versão e Galeria reutilizam a página do projeto. Os cartões somente selecionam a versão;
+as abas Changelog e Mods nos modpacks, ou Changelog e Dependências nos mods, texturas e shaders,
+ficam acessíveis diretamente e consultam essa seleção. A aba Mods é exclusiva dos modpacks.
+Dependências incluem conteúdo obrigatório e opcional declarado para a versão consultada, com seu tipo identificado
+(ou a publicação mais recente quando não há instância/versão selecionada). A consulta não instala conteúdo.
+`listar_conteudos_versao_projeto(fonte, projetoId, versaoId?, tipoProjeto)` resolve o arquivo exato da plataforma.
+Modpacks usam `manifest.json`, `modrinth.index.json` ou `dome_manifest.json`, incluindo JARs dos overrides.
+Referências remotas recebem nome, ícone e versão; arquivos sem identidade remota conservam o nome do arquivo.
+Falha de consulta, lista vazia e carregamento são estados distintos, com nova tentativa em caso de falha.
+
+`trocar_versao_modpack_publico(instanceId, projetoId, versaoId, fonte)` valida o vínculo da instância, baixa o pacote
+exato de Modrinth/CurseForge e prepara o Minecraft e loader declarados no manifesto em uma pasta temporária na
+unidade das instâncias. A troca aceita versões anteriores e outras versões de Minecraft/loader suportadas.
+Os hashes fornecidos pela plataforma são conferidos; falhas de preparação deixam a instância original intacta.
+A publicação guarda a instância anterior em `.social-backups`, conserva ID/nome e configurações de execução,
+remove os mods antigos e adicionais (inclusive desativados) e aplica o conjunto completo da versão escolhida.
+Mundos, opções do jogador e servidores pessoais são preservados. A interface pede confirmação antes de substituir
+mods e informa quando o Minecraft muda. O jogo deve estar fechado; o comando antigo `install_modpack_files`
+recusa substituição direta sem backup. Dome reutiliza a preparação/publicação de `.dome`, sem restringir a troca
+ao Minecraft/loader anterior. Na importação externa, vínculos explícitos de `minecraftinstance.json` e
+`profile.json`, além do banco Modrinth atual e legado, são persistidos; sem identificadores do projeto e arquivo,
+não se infere a origem pelo nome. O vínculo do banco atual vem de `instance_links`, conforme a
+[migração oficial do Modrinth](https://github.com/modrinth/code/blob/main/packages/app-lib/migrations/20260611120000_instances-content-foundation.sql).
+`bun run verificar:projetos-modpacks` verifica a interface com IPC simulado nas três fontes e guarda capturas
+em `output/verificacao-projetos`. Testes Rust exercitam publicação local, backup, remoção de mods, falha de download
+e travessia de caminho; não substituem instalar um pacote remoto e abrir Minecraft na janela nativa.
+O teste opcional `cargo test --manifest-path src-tauri/Cargo.toml consulta_remota_mods_modpacks_e_dependencias -- --ignored --nocapture`
+consulta manifestos reais de Fabulously Optimized/Modrinth e RLCraft/CurseForge e dependências obrigatórias de
+Iris e Waystones. Essa consulta remota passou; não modifica instâncias nem inicia Minecraft.
 Discord Rich Presence em `comandos/presenca_discord.rs` também é distinto do social da DomeAPI.
 O updater usa GitHub, conforme `tauri.conf.json`, e não `/api/launcher`.
+
+### Progresso de operações e mundos
+
+Criação/migração de instâncias, instalação/troca de mods, texturas, shaders e modpacks aceitam o argumento opcional
+`progresso`, com um `Channel` Tauri que recebe `{ porcentagem, etapa }`. O wrapper nativo `CanalProgresso` aceita
+chamadores antigos sem canal. Percentuais usam bytes conhecidos, arquivos concluídos e intervalos por fase;
+respostas atrasadas não fazem o valor diminuir. Sem Content-Length, a fase mantém o último valor confirmado até
+terminar. A interface não usa temporizadores para simular avanço, e a conclusão é confirmada após a gravação.
+As notificações de instalação continuam recebendo progresso após sair da página que iniciou a operação.
+
+`get_worlds` soma os tamanhos lógicos dos arquivos de cada mundo, incluindo dimensões e subpastas, em trabalho
+bloqueante fora da janela. Retorna `sizeBytes` e `sizeOnDisk` formatado com unidades binárias. Não segue links
+simbólicos e propaga falhas de leitura, em vez de mostrar um tamanho fixo ou parcial como sucesso.
 
 Ao mudar contratos, atualize comando Rust, registro, tipos/UI e este documento. Se o servidor precisar mudar,
 considere compatibilidade entre versões; alterar um checkout não implanta a API. Valide, conforme o escopo,

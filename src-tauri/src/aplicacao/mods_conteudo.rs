@@ -1,4 +1,14 @@
 use super::*;
+use crate::comandos::progresso_operacao::{ler_download, Acompanhamento, CanalProgresso};
+#[path = "fila_instalacao.rs"]
+mod fila;
+#[path = "mods_migracao.rs"]
+mod migracao;
+pub(super) use migracao::instalar_mod_migracao;
+use migracao::{buscar_arquivo_curseforge_migracao, selecionar_versao_modrinth_migracao};
+#[cfg(test)]
+#[path = "testes_consulta_curseforge.rs"]
+mod testes_consulta_curseforge;
 
 fn normalizar_loader_para_mods(loader: Option<&str>) -> Option<String> {
     let loader = loader?.trim().to_lowercase();
@@ -95,10 +105,6 @@ fn pontuar_arquivo_curseforge(
     if !nome_arquivo_valido_curseforge(tipo_conteudo, nome_arquivo) {
         return None;
     }
-    if !arquivo["downloadUrl"].is_string() {
-        return None;
-    }
-
     let (versoes_mc, tags_loader) = extrair_tags_arquivo_curseforge(arquivo);
     let mut score = 0;
 
@@ -143,8 +149,27 @@ fn selecionar_arquivo_curseforge_compativel<'a>(
             pontuar_arquivo_curseforge(arquivo, tipo_conteudo, versao_instancia, loader_instancia)
                 .map(|score| (score, arquivo))
         })
-        .max_by_key(|(score, _)| *score)
+        .max_by_key(|(score, arquivo)| (url_download_curseforge(arquivo).is_some(), *score))
         .map(|(_, arquivo)| arquivo)
+}
+
+fn url_download_curseforge(arquivo: &serde_json::Value) -> Option<&str> {
+    arquivo["downloadUrl"]
+        .as_str()
+        .map(str::trim)
+        .filter(|url| !url.is_empty())
+}
+
+fn exigir_download_curseforge<'a>(
+    arquivo: &'a serde_json::Value,
+    nome_projeto: &str,
+) -> Result<&'a str, String> {
+    url_download_curseforge(arquivo).ok_or_else(|| {
+        format!(
+            "{nome_projeto}: O CurseForge não disponibiliza download para terceiros. \
+             Baixe este mod no próprio CurseForge e importe para a instância."
+        )
+    })
 }
 
 #[derive(Debug, Serialize)]
@@ -258,31 +283,48 @@ pub(crate) async fn listar_versoes_projeto_curseforge(
         }
     }
     let client = reqwest::Client::new();
-    let request = anexar_headers_curseforge(client.get(&files_url))?;
-    let resposta = request
-        .send()
-        .await
-        .map_err(|e| format!("Erro ao buscar versões do CurseForge: {}", e))?;
+    let mut resultado = Vec::new();
+    let mut indice = 0;
+    loop {
+        let request = anexar_headers_curseforge(client.get(format!("{files_url}&index={indice}")))?;
+        let resposta = request
+            .send()
+            .await
+            .map_err(|e| format!("Erro ao buscar versões do CurseForge: {}", e))?;
 
-    if !resposta.status().is_success() {
-        return Err(format!(
-            "CurseForge retornou erro ao listar versões: {}",
-            resposta.status()
-        ));
+        if !resposta.status().is_success() {
+            return Err(format!(
+                "CurseForge retornou erro ao listar versões: {}",
+                resposta.status()
+            ));
+        }
+
+        let payload: serde_json::Value = resposta
+            .json()
+            .await
+            .map_err(|e| format!("Erro ao interpretar versões do CurseForge: {}", e))?;
+        let arquivos = payload["data"]
+            .as_array()
+            .ok_or("Resposta do CurseForge sem lista de versões.")?;
+
+        resultado.extend(
+            arquivos
+                .iter()
+                .filter_map(|arquivo| mapear_versao_projeto_curseforge(arquivo, &project_type)),
+        );
+        indice += arquivos.len();
+        let total = payload["pagination"]["totalCount"]
+            .as_u64()
+            .unwrap_or(indice as u64) as usize;
+        if (game_version.is_some() && project_type != "modpack")
+            || arquivos.is_empty()
+            || indice >= total
+            || indice >= 10_000
+        {
+            break;
+        }
     }
-
-    let payload: serde_json::Value = resposta
-        .json()
-        .await
-        .map_err(|e| format!("Erro ao interpretar versões do CurseForge: {}", e))?;
-    let arquivos = payload["data"]
-        .as_array()
-        .ok_or("Resposta do CurseForge sem lista de versões.")?;
-
-    Ok(arquivos
-        .iter()
-        .filter_map(|arquivo| mapear_versao_projeto_curseforge(arquivo, &project_type))
-        .collect())
+    Ok(resultado)
 }
 
 #[tauri::command]
@@ -325,6 +367,47 @@ pub(crate) async fn obter_versao_projeto_curseforge(
         .map_err(|e| format!("Erro ao interpretar versão do CurseForge: {}", e))?;
     mapear_versao_projeto_curseforge(&payload["data"], &project_type)
         .ok_or_else(|| "Versão do CurseForge sem arquivo instalável.".to_string())
+}
+
+#[tauri::command]
+pub(crate) async fn obter_changelog_versao_curseforge(
+    project_id: String,
+    file_id: String,
+) -> Result<String, String> {
+    let project_id = project_id
+        .trim()
+        .parse::<u64>()
+        .ok()
+        .filter(|id| *id > 0)
+        .ok_or("ID de projeto CurseForge inválido.")?;
+    let file_id = file_id
+        .trim()
+        .parse::<u64>()
+        .ok()
+        .filter(|id| *id > 0)
+        .ok_or("ID de arquivo CurseForge inválido.")?;
+    let url = format!(
+        "{}/mods/{}/files/{}/changelog",
+        CURSEFORGE_API_BASE, project_id, file_id
+    );
+    let resposta = anexar_headers_curseforge(reqwest::Client::new().get(url))?
+        .send()
+        .await
+        .map_err(|erro| format!("Erro ao buscar changelog do CurseForge: {}", erro))?;
+    if !resposta.status().is_success() {
+        return Err(format!(
+            "CurseForge retornou erro ao buscar changelog: {}",
+            resposta.status()
+        ));
+    }
+    let dados: serde_json::Value = resposta
+        .json()
+        .await
+        .map_err(|erro| format!("Erro ao interpretar changelog do CurseForge: {}", erro))?;
+    dados["data"]
+        .as_str()
+        .map(str::to_string)
+        .ok_or_else(|| "Resposta do CurseForge sem changelog válido.".to_string())
 }
 
 fn versao_modrinth_compativel(
@@ -410,6 +493,7 @@ pub(crate) struct ItemPlanoInstalacaoConteudo {
     tipo_projeto: String,
     requerido_por: Vec<String>,
     selecionado: bool,
+    selecoes: Vec<String>,
 }
 
 enum EtapaPlanoInstalacao {
@@ -547,6 +631,7 @@ async fn resolver_modrinth_obrigatorio(
     referencia: &ReferenciaModObrigatorio,
     versao_instancia: &str,
     loader_instancia: &Option<String>,
+    preferir_estaveis: bool,
 ) -> Result<ArquivoModResolvido, String> {
     let (project_id, version_id) = match referencia {
         ReferenciaModObrigatorio::Modrinth {
@@ -607,18 +692,24 @@ async fn resolver_modrinth_obrigatorio(
                 project_id
             ));
         }
-        resposta
+        let versoes = resposta
             .json::<Vec<serde_json::Value>>()
             .await
-            .map_err(|e| format!("Erro ao interpretar versões da dependência: {}", e))?
-            .into_iter()
-            .find(|item| versao_modrinth_compativel(item, versao_instancia, loader_instancia))
-            .ok_or_else(|| {
-                format!(
-                    "A dependência obrigatória {} não possui versão para MC {} e loader {:?}.",
-                    project_id, versao_instancia, loader_instancia
-                )
-            })?
+            .map_err(|e| format!("Erro ao interpretar versões da dependência: {}", e))?;
+        let compativeis = versoes
+            .iter()
+            .filter(|item| versao_modrinth_compativel(item, versao_instancia, loader_instancia));
+        let escolhida = if preferir_estaveis {
+            selecionar_versao_modrinth_migracao(&versoes, versao_instancia, loader_instancia)
+        } else {
+            compativeis.into_iter().next()
+        };
+        escolhida.cloned().ok_or_else(|| {
+            format!(
+                "A dependência obrigatória {} não possui versão para MC {} e loader {:?}.",
+                project_id, versao_instancia, loader_instancia
+            )
+        })?
     };
 
     if !versao_modrinth_compativel(&versao, versao_instancia, loader_instancia) {
@@ -683,6 +774,7 @@ async fn resolver_curseforge_obrigatorio(
     referencia: &ReferenciaModObrigatorio,
     versao_instancia: &str,
     loader_instancia: &Option<String>,
+    preferir_estaveis: bool,
 ) -> Result<ArquivoModResolvido, String> {
     let (project_id, file_id) = match referencia {
         ReferenciaModObrigatorio::CurseForge {
@@ -691,6 +783,7 @@ async fn resolver_curseforge_obrigatorio(
         } => (project_id, file_id.as_deref()),
         _ => return Err("Referência CurseForge inválida.".to_string()),
     };
+    let metadados = buscar_metadados_projeto_curseforge(client, project_id).await?;
 
     let arquivo = if let Some(file_id) = file_id {
         let url = format!(
@@ -713,6 +806,17 @@ async fn resolver_curseforge_obrigatorio(
             .await
             .map_err(|e| format!("Erro ao interpretar dependência CurseForge: {}", e))?["data"]
             .clone()
+    } else if preferir_estaveis {
+        buscar_arquivo_curseforge_migracao(client, project_id, versao_instancia, loader_instancia)
+            .await?
+            .ok_or_else(|| {
+                format!(
+                    "O projeto \"{}\" não possui arquivo para MC {} e loader {}.",
+                    metadados.nome,
+                    versao_instancia,
+                    loader_instancia.as_deref().unwrap_or("Vanilla")
+                )
+            })?
     } else {
         let mut url = format!(
             "{}/mods/{}/files?gameVersion={}&pageSize=50&sortField=1&sortOrder=desc",
@@ -750,28 +854,28 @@ async fn resolver_curseforge_obrigatorio(
         .cloned()
         .ok_or_else(|| {
             format!(
-                "A dependência obrigatória {} não possui arquivo para MC {} e loader {:?}.",
-                project_id, versao_instancia, loader_instancia
+                "O projeto \"{}\" não possui arquivo para MC {} e loader {}.",
+                metadados.nome,
+                versao_instancia,
+                loader_instancia.as_deref().unwrap_or("Vanilla")
             )
         })?
     };
 
     if pontuar_arquivo_curseforge(&arquivo, "mod", versao_instancia, loader_instancia).is_none() {
         return Err(format!(
-            "A dependência obrigatória CurseForge {} não é compatível com MC {} e loader {:?}.",
-            project_id, versao_instancia, loader_instancia
+            "O arquivo do projeto \"{}\" não é compatível com MC {} e loader {}.",
+            metadados.nome,
+            versao_instancia,
+            loader_instancia.as_deref().unwrap_or("Vanilla")
         ));
     }
 
-    let download_url = arquivo["downloadUrl"]
-        .as_str()
-        .ok_or("Dependência CurseForge compatível sem URL de download.")?
-        .to_string();
+    let download_url = exigir_download_curseforge(&arquivo, &metadados.nome)?.to_string();
     let file_name = arquivo["fileName"]
         .as_str()
         .ok_or("Dependência CurseForge sem nome de arquivo.")?
         .to_string();
-    let metadados = buscar_metadados_projeto_curseforge(client, project_id).await?;
     let mut dependencias = Vec::new();
     if let Some(itens) = arquivo["dependencies"].as_array() {
         for item in itens {
@@ -816,14 +920,43 @@ async fn resolver_arquivo_mod_obrigatorio(
     versao_instancia: &str,
     loader_instancia: &Option<String>,
 ) -> Result<ArquivoModResolvido, String> {
+    resolver_arquivo_mod_com_preferencia(
+        client,
+        referencia,
+        versao_instancia,
+        loader_instancia,
+        false,
+    )
+    .await
+}
+
+async fn resolver_arquivo_mod_com_preferencia(
+    client: &reqwest::Client,
+    referencia: &ReferenciaModObrigatorio,
+    versao_instancia: &str,
+    loader_instancia: &Option<String>,
+    preferir_estaveis: bool,
+) -> Result<ArquivoModResolvido, String> {
     match referencia {
         ReferenciaModObrigatorio::Modrinth { .. } => {
-            resolver_modrinth_obrigatorio(client, referencia, versao_instancia, loader_instancia)
-                .await
+            resolver_modrinth_obrigatorio(
+                client,
+                referencia,
+                versao_instancia,
+                loader_instancia,
+                preferir_estaveis,
+            )
+            .await
         }
         ReferenciaModObrigatorio::CurseForge { .. } => {
-            resolver_curseforge_obrigatorio(client, referencia, versao_instancia, loader_instancia)
-                .await
+            resolver_curseforge_obrigatorio(
+                client,
+                referencia,
+                versao_instancia,
+                loader_instancia,
+                preferir_estaveis,
+            )
+            .await
         }
     }
 }
@@ -995,10 +1128,7 @@ async fn resolver_projeto_sem_dependencias(
                 .as_str()
                 .ok_or_else(|| format!("{} retornou um arquivo sem nome.", selecao.nome))?
                 .to_string();
-            let download_url = arquivo["downloadUrl"]
-                .as_str()
-                .ok_or_else(|| format!("{} retornou um arquivo sem URL.", selecao.nome))?
-                .to_string();
+            let download_url = exigir_download_curseforge(arquivo, &selecao.nome)?.to_string();
 
             Ok(ArquivoModResolvido {
                 chave: format!("curseforge:project:{}", selecao.id),
@@ -1059,6 +1189,7 @@ fn adicionar_item_ao_plano(
         tipo_projeto: tipo_projeto.to_string(),
         requerido_por: requerido_por.into_iter().collect(),
         selecionado: nome_selecionado.is_some(),
+        selecoes: Vec::new(),
     });
 }
 
@@ -1141,7 +1272,7 @@ pub(crate) async fn planejar_instalacao_conteudo(
     instance_id: String,
     itens: Vec<SelecaoInstalacaoConteudo>,
     state: State<'_, LauncherState>,
-) -> Result<Vec<ItemPlanoInstalacaoConteudo>, String> {
+) -> Result<fila::PlanoInstalacaoConteudo, String> {
     if itens.is_empty() {
         return Err("Selecione ao menos um conteúdo para revisar.".to_string());
     }
@@ -1153,48 +1284,7 @@ pub(crate) async fn planejar_instalacao_conteudo(
     let versao_minecraft = instancia.version.clone();
     let loader = normalizar_loader_para_mods(instancia.loader_type.as_deref());
     let client = reqwest::Client::new();
-    let mut plano = Vec::new();
-
-    for selecao in itens {
-        if !matches!(
-            selecao.tipo_projeto.as_str(),
-            "mod" | "resourcepack" | "shader"
-        ) {
-            return Err(format!(
-                "Tipo de conteúdo inválido: {}.",
-                selecao.tipo_projeto
-            ));
-        }
-        if selecao.id.trim().is_empty() || selecao.nome.trim().is_empty() {
-            return Err("Um conteúdo selecionado não possui identificação válida.".to_string());
-        }
-
-        if selecao.tipo_projeto == "mod" {
-            adicionar_mod_e_dependencias_ao_plano(
-                &client,
-                &mut plano,
-                &selecao,
-                &versao_minecraft,
-                &loader,
-            )
-            .await?;
-            continue;
-        }
-
-        let arquivo =
-            resolver_projeto_sem_dependencias(&client, &selecao, &versao_minecraft, &loader)
-                .await?;
-        adicionar_item_ao_plano(
-            &mut plano,
-            arquivo,
-            &selecao.tipo_projeto,
-            Some(&selecao.nome),
-            selecao.icone_url.as_deref(),
-            None,
-        );
-    }
-
-    Ok(plano)
+    Ok(fila::planejar_conteudos(&client, itens, &versao_minecraft, &loader).await)
 }
 
 #[cfg(test)]
@@ -1395,6 +1485,21 @@ async fn baixar_e_instalar_arquivos_mod(
     mods_dir: &std::path::Path,
     arquivos: Vec<ArquivoModResolvido>,
 ) -> Result<(), String> {
+    baixar_e_instalar_arquivos_mod_com_progresso(
+        client,
+        mods_dir,
+        arquivos,
+        &Acompanhamento::default(),
+    )
+    .await
+}
+
+async fn baixar_e_instalar_arquivos_mod_com_progresso(
+    client: &reqwest::Client,
+    mods_dir: &std::path::Path,
+    arquivos: Vec<ArquivoModResolvido>,
+    progresso: &Acompanhamento,
+) -> Result<(), String> {
     let arquivos = arquivos
         .into_iter()
         .map(|arquivo| {
@@ -1406,6 +1511,7 @@ async fn baixar_e_instalar_arquivos_mod(
         .map_err(|e| format!("Erro ao preparar instalação dos mods: {}", e))?;
     let mut temporarios = Vec::new();
     let mut nomes_agendados = std::collections::HashSet::new();
+    let total = arquivos.len().max(1);
 
     for (indice, (download_url, nome)) in arquivos.into_iter().enumerate() {
         if !nomes_agendados.insert(nome.to_lowercase()) {
@@ -1427,7 +1533,11 @@ async fn baixar_e_instalar_arquivos_mod(
             let _ = std::fs::remove_dir_all(&pasta_temporaria);
             return Err(format!("Download de {} retornou HTTP {}.", nome, status));
         }
-        let bytes = match resposta.bytes().await {
+        let inicio = (indice * 90 / total) as u8;
+        let fim = ((indice + 1) * 90 / total) as u8;
+        let bytes = match ler_download(resposta, &progresso.faixa(inicio, fim), "Baixando conteúdo")
+            .await
+        {
             Ok(bytes) => bytes,
             Err(e) => {
                 let _ = std::fs::remove_dir_all(&pasta_temporaria);
@@ -1444,6 +1554,7 @@ async fn baixar_e_instalar_arquivos_mod(
 
     publicar_arquivos_mod_em_segundo_plano(temporarios, pasta_temporaria.clone()).await?;
     let _ = std::fs::remove_dir_all(pasta_temporaria);
+    progresso.concluir("Conteúdo instalado");
     Ok(())
 }
 
@@ -1541,88 +1652,15 @@ fn reverter_publicacao_mods(
     }
 }
 
-pub(super) async fn instalar_mod_modrinth_compativel(
-    client: &reqwest::Client,
-    mods_dir: &std::path::Path,
-    project_id: String,
-    versao_minecraft: &str,
-    loader: &Option<String>,
-) -> Result<(), String> {
-    let mut etapas = vec![EtapaResolucaoMod::Resolver(
-        ReferenciaModObrigatorio::Modrinth {
-            project_id: Some(project_id),
-            version_id: None,
-        },
-    )];
-    let mut visitados = std::collections::HashSet::new();
-    let mut arquivos = Vec::new();
-
-    while let Some(etapa) = etapas.pop() {
-        match etapa {
-            EtapaResolucaoMod::Resolver(referencia) => {
-                if !visitados.insert(referencia.chave()) {
-                    continue;
-                }
-                let resolvido =
-                    resolver_arquivo_mod_obrigatorio(client, &referencia, versao_minecraft, loader)
-                        .await?;
-                let dependencias = resolvido.dependencias.clone();
-                etapas.push(EtapaResolucaoMod::AgendarDownload(resolvido));
-                for dependencia in dependencias.into_iter().rev() {
-                    etapas.push(EtapaResolucaoMod::Resolver(dependencia));
-                }
-            }
-            EtapaResolucaoMod::AgendarDownload(arquivo) => arquivos.push(arquivo),
-        }
-    }
-
-    baixar_e_instalar_arquivos_mod(client, mods_dir, arquivos).await
-}
-
-pub(super) async fn instalar_mod_curseforge_compativel(
-    client: &reqwest::Client,
-    mods_dir: &std::path::Path,
-    project_id: String,
-    versao_minecraft: &str,
-    loader: &Option<String>,
-) -> Result<(), String> {
-    let mut etapas = vec![EtapaResolucaoMod::Resolver(
-        ReferenciaModObrigatorio::CurseForge {
-            project_id,
-            file_id: None,
-        },
-    )];
-    let mut visitados = std::collections::HashSet::new();
-    let mut arquivos = Vec::new();
-
-    while let Some(etapa) = etapas.pop() {
-        match etapa {
-            EtapaResolucaoMod::Resolver(referencia) => {
-                if !visitados.insert(referencia.chave()) {
-                    continue;
-                }
-                let resolvido =
-                    resolver_arquivo_mod_obrigatorio(client, &referencia, versao_minecraft, loader)
-                        .await?;
-                let dependencias = resolvido.dependencias.clone();
-                etapas.push(EtapaResolucaoMod::AgendarDownload(resolvido));
-                for dependencia in dependencias.into_iter().rev() {
-                    etapas.push(EtapaResolucaoMod::Resolver(dependencia));
-                }
-            }
-            EtapaResolucaoMod::AgendarDownload(arquivo) => arquivos.push(arquivo),
-        }
-    }
-
-    baixar_e_instalar_arquivos_mod(client, mods_dir, arquivos).await
-}
-
 #[tauri::command]
 pub(crate) async fn install_mod(
     instance_id: String,
     mod_info: ModInfo,
     state: State<'_, LauncherState>,
+    progresso: CanalProgresso,
 ) -> Result<String, String> {
+    let acompanhamento = Acompanhamento::novo(progresso.0);
+    acompanhamento.informar("Resolvendo dependências", 0, 1);
     let instances = state.get_instances().map_err(|e| e.to_string())?;
     let instance = instances
         .iter()
@@ -1683,7 +1721,16 @@ pub(crate) async fn install_mod(
         }
     }
 
-    baixar_e_instalar_arquivos_mod(&client, &mods_dir, arquivos).await?;
+    acompanhamento
+        .faixa(0, 15)
+        .concluir("Dependências resolvidas");
+    baixar_e_instalar_arquivos_mod_com_progresso(
+        &client,
+        &mods_dir,
+        arquivos,
+        &acompanhamento.faixa(15, 100),
+    )
+    .await?;
     nome_arquivo_principal.ok_or_else(|| "Arquivo principal do mod não foi resolvido.".to_string())
 }
 
@@ -1694,17 +1741,19 @@ pub(crate) async fn install_project_file(
     download_url: String,
     file_name: String,
     state: State<'_, LauncherState>,
+    progresso: CanalProgresso,
 ) -> Result<String, String> {
     let instance = obter_instancia_por_id(&state, &instance_id)?;
     let tipo_normalizado = project_type.trim().to_lowercase();
     let pasta_destino = pasta_destino_conteudo(&instance, &tipo_normalizado)?;
 
-    baixar_arquivo_para_pasta(
+    baixar_arquivo_para_pasta_com_progresso(
         &pasta_destino,
         &tipo_normalizado,
         download_url,
         file_name,
         "projeto",
+        &Acompanhamento::novo(progresso.0),
     )
     .await
 }
@@ -1724,12 +1773,13 @@ fn pasta_destino_conteudo(
     }
 }
 
-async fn baixar_arquivo_para_pasta(
+async fn baixar_arquivo_para_pasta_com_progresso(
     pasta_destino: &std::path::Path,
     tipo_normalizado: &str,
     download_url: String,
     file_name: String,
     prefixo_fallback: &str,
+    progresso: &Acompanhamento,
 ) -> Result<String, String> {
     std::fs::create_dir_all(pasta_destino).map_err(|e| e.to_string())?;
 
@@ -1751,10 +1801,7 @@ async fn baixar_arquivo_para_pasta(
         ));
     }
 
-    let bytes = resposta
-        .bytes()
-        .await
-        .map_err(|e| format!("Erro ao ler bytes do projeto: {}", e))?;
+    let bytes = ler_download(resposta, &progresso.faixa(0, 90), "Baixando conteúdo").await?;
 
     let extensao_padrao = if tipo_normalizado == "mod" {
         ".jar"
@@ -1808,6 +1855,7 @@ async fn baixar_arquivo_para_pasta(
     .await?;
     let _ = std::fs::remove_dir_all(&pasta_temporaria);
 
+    progresso.concluir("Conteúdo instalado");
     Ok(nome_arquivo_final)
 }
 
@@ -1979,6 +2027,7 @@ pub(crate) async fn install_curseforge_project_file(
     project_type: String,
     project_id: String,
     state: State<'_, LauncherState>,
+    progresso: CanalProgresso,
 ) -> Result<String, String> {
     let instance = obter_instancia_por_id(&state, &instance_id)?;
     let tipo_normalizado = project_type.trim().to_lowercase();
@@ -1996,12 +2045,13 @@ pub(crate) async fn install_curseforge_project_file(
         resolver_projeto_sem_dependencias(&client, &selecao, &instance.version, &loader_instancia)
             .await?;
 
-    baixar_arquivo_para_pasta(
+    baixar_arquivo_para_pasta_com_progresso(
         &pasta_destino,
         &tipo_normalizado,
         arquivo.download_url,
         arquivo.file_name,
         "curseforge",
+        &Acompanhamento::novo(progresso.0),
     )
     .await
 }

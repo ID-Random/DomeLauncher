@@ -11,7 +11,7 @@ const OPCOES_NUMERICAS = [
     { chave: "fov", nome: "Campo de visão", min: 30, max: 110, step: 1, unidade: "graus" },
     { chave: "gamma", nome: "Brilho", min: 0, max: 100, step: 1, unidade: "%" },
     { chave: "mouseSensitivity", nome: "Sensibilidade do mouse", min: 0, max: 200, step: 1, unidade: "%" },
-    { chave: "guiScale", nome: "Escala da interface", min: 0, max: 16, step: 1, unidade: "0 = automática" },
+    { chave: "guiScale", nome: "Escala da interface", min: 0, max: 3, step: 1, unidade: "0 = automática" },
     { chave: "soundCategory_master", nome: "Volume geral", min: 0, max: 100, step: 1, unidade: "%" },
     { chave: "soundCategory_music", nome: "Música", min: 0, max: 100, step: 1, unidade: "%" },
 ] as const;
@@ -21,6 +21,12 @@ const OPCOES_BOOLEANAS = [
     { chave: "autoJump", nome: "Pulo automático" },
     { chave: "invertYMouse", nome: "Inverter eixo Y do mouse" },
 ] as const;
+
+function formatarValorSelecao(chave: string, valor: number, maximo: number): string {
+    if (chave === "renderDistance") return `${valor} chunks`;
+    if (chave === "maxFps") return valor === maximo ? "Ilimitado" : `${valor} FPS`;
+    return valor === 0 ? "0 — Automática" : String(valor);
+}
 
 function converterValor(chave: string, valor: string, paraJogo: boolean): string {
     if (!valor) return "";
@@ -128,7 +134,7 @@ export default function OpcoesJogo({ instanceId }: { instanceId: string }) {
                         {OPCOES_NUMERICAS.map((opcao) => {
                             const chave = opcao.chave === "soundCategory_master" && "sound" in valores ? "sound"
                                 : opcao.chave === "soundCategory_music" && "music" in valores ? "music" : opcao.chave;
-                            const usarSelecao = chave === "renderDistance" || chave === "maxFps";
+                            const usarSelecao = ["renderDistance", "maxFps", "guiScale"].includes(chave);
                             const quantidadeValores = (opcao.max - opcao.min) / opcao.step + 1;
                             const valor = entradasNumericas[chave]
                                 ?? converterValor(chave, valores[chave] ?? "", false);
@@ -147,8 +153,7 @@ export default function OpcoesJogo({ instanceId }: { instanceId: string }) {
                                             <option value="">Padrão do jogo</option>
                                             {Array.from({ length: quantidadeValores }, (_, indice) => {
                                                 const numero = opcao.min + indice * opcao.step;
-                                                const rotulo = chave === "renderDistance" ? `${numero} chunks`
-                                                    : numero === opcao.max ? "Ilimitado" : `${numero} FPS`;
+                                                const rotulo = formatarValorSelecao(chave, numero, opcao.max);
                                                 return <option key={numero} value={numero}>{rotulo}</option>;
                                             })}
                                         </select>

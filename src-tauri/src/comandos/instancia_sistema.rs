@@ -329,6 +329,8 @@ pub struct WorldInfo {
     pub difficulty: String,
     pub last_played: String,
     pub size_on_disk: String,
+    #[serde(default)]
+    pub size_bytes: u64,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -563,9 +565,10 @@ fn salvar_servidores_instancia(
 }
 
 #[tauri::command]
-pub fn get_worlds(
+pub async fn get_worlds(
     instance_id: String,
-    state: State<LauncherState>,
+    state: State<'_, LauncherState>,
+    progresso: super::progresso_operacao::CanalProgresso,
 ) -> Result<Vec<WorldInfo>, String> {
     let instances = state.get_instances().map_err(|e| e.to_string())?;
     let instance = instances
@@ -574,35 +577,12 @@ pub fn get_worlds(
         .ok_or("Instância não encontrada")?;
 
     let saves_dir = instance.path.join("saves");
-    let mut worlds = vec![];
-
-    if saves_dir.exists() {
-        if let Ok(entries) = std::fs::read_dir(saves_dir) {
-            for entry in entries.flatten() {
-                if entry.path().is_dir() {
-                    let level_dat = entry.path().join("level.dat");
-                    if level_dat.exists() {
-                        let world_name = entry
-                            .file_name()
-                            .to_str()
-                            .unwrap_or("Mundo Desconhecido")
-                            .to_string();
-
-                        worlds.push(WorldInfo {
-                            name: world_name,
-                            path: entry.path().to_str().unwrap_or("").to_string(),
-                            game_mode: "Survival".to_string(), // Simulado
-                            difficulty: "Normal".to_string(),  // Simulado
-                            last_played: "Recentemente".to_string(), // Simulado
-                            size_on_disk: "100 MB".to_string(), // Simulado
-                        });
-                    }
-                }
-            }
-        }
-    }
-
-    Ok(worlds)
+    let acompanhamento = super::progresso_operacao::Acompanhamento::novo(progresso.0);
+    tauri::async_runtime::spawn_blocking(move || {
+        super::mundos_instancia::listar_mundos(&saves_dir, &acompanhamento)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
